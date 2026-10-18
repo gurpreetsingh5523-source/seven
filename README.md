@@ -181,3 +181,6 @@ Instagram), mouse control with per-step approval, and smart-home control.
 [PolyForm Noncommercial 1.0.0](LICENSE). Free for personal, educational, research and other
 noncommercial use, including changing the code for yourself. Commercial use needs written
 permission: open an issue at <https://github.com/gurpreetsingh5523-source/seven/issues>.
+
+The Voice Orb (the animated orb and starfield) is licensed only to run as part of 7 Live; it may not be
+reused anywhere else, commercial or not, without permission. See the Voice Orb exception in [LICENSE](LICENSE).

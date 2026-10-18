@@ -4,6 +4,13 @@ Commercial use is not covered by this license. To use 7 Live in a commercial
 product, service or business, ask for written permission first by opening an
 issue at https://github.com/gurpreetsingh5523-source/seven/issues
 
+Voice Orb exception: the Voice Orb (the animated orb, its mesh and particle styles and the
+starfield behind it, in static/live.html and static/live_core.js, also published separately at
+https://github.com/gurpreetsingh5523-source/voice-orb) is licensed under the terms below ONLY to
+run it as part of 7 Live. You may not extract, copy, adapt or reuse the Voice Orb, or any part of
+its look or code, in any other software, website, video or product, commercial or not, without
+written permission from the licensor. All other rights in the Voice Orb are reserved.
+
 # PolyForm Noncommercial License 1.0.0
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>

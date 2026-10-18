@@ -178,4 +178,6 @@ Instagram), mouse control with per-step approval, and smart-home control.
 
 ## License
 
-See [LICENSE](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE). Free for personal, educational, research and other
+noncommercial use, including changing the code for yourself. Commercial use needs written
+permission: open an issue at <https://github.com/gurpreetsingh5523-source/seven/issues>.

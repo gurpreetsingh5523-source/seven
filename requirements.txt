@@ -1,0 +1,31 @@
+# core: server, Gemini Live voice, safety core
+google-genai==2.28.0
+websockets
+httpx
+psutil
+numpy
+
+# offline speech-to-text (Whisper for English, wav2vec2 for Punjabi)
+faster-whisper
+transformers
+torch
+
+# documents: Word, Excel, PowerPoint, PDF, file drop
+python-docx
+openpyxl
+python-pptx
+fpdf2
+uharfbuzz           # text shaping for Gurmukhi PDFs
+pypdf
+
+# macOS app window and Calendar/Reminders
+pyobjc-framework-Cocoa
+pyobjc-framework-WebKit
+pyobjc-framework-EventKit
+
+# tests
+pytest
+
+# optional
+# playwright          browser tool in the older Agent 7 face (then: playwright install chromium)
+# mlx-lm              local brain for offline mode: mlx_lm.server on 127.0.0.1:8097

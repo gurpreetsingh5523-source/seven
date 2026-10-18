@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7 Live</title>
+<style>
+  /* 7 Live boot: transparent full-screen overlay on the desktop.
+   * Hero launch moment: bold glowing ੭ core, massive SEVEN wordmark with
+   * moving text sweep, sparkling particles, LIVE pill with expanding rings. */
+  :root {
+    --accent: #7dd3fc;
+    --glow-deep: #0b1a33;
+    --glow-mid: #103252;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    height: 100vh; overflow: hidden; background: transparent;
+    color: #eaf4ff; font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    display: flex; align-items: center; justify-content: center;
+    animation: body-out .4s ease-in 3.0s forwards;
+  }
+  #scrim {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse 75% 70% at 50% 46%,
+                rgba(3, 8, 22, .93) 0%, rgba(3, 8, 22, .86) 45%, rgba(2, 5, 14, .62) 100%);
+    animation: scrim-in .35s ease-out forwards;
+  }
+  @keyframes scrim-in { to { opacity: 1; } }
+  #fx {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  #scene {
+    position: relative; z-index: 1; text-align: center;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  #mark {
+    font-size: 22vh; line-height: 1; font-weight: 800;
+    background: linear-gradient(180deg, #ffffff 0%, #e0f2fe 45%, var(--accent) 100%);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 18px rgba(255, 255, 255, .85)) drop-shadow(0 0 48px rgba(56, 189, 248, .9));
+    opacity: 0; transform: scale(1.6);
+    animation: mark-in .7s cubic-bezier(.16, 1, .3, 1) .88s forwards;
+    will-change: transform, opacity, filter;
+  }
+  #word {
+    display: flex; gap: .45em; margin-top: 1.5vh;
+    font-size: 11.5vh; font-weight: 800; letter-spacing: .38em;
+    color: #e6f3ff; position: relative;
+    text-shadow: 0 0 28px rgba(125, 211, 252, .75),
+                 0 0 70px rgba(56, 189, 248, .4);
+    animation: word-glow .5s ease 2.7s forwards;
+    will-change: opacity;
+  }
+  #word span {
+    display: inline-block; opacity: 0;
+    transform: translateY(28px) scale(.92);
+    filter: blur(14px);
+    background: linear-gradient(110deg, #ffffff 0%, #e0f2fe 30%, #7dd3fc 55%, #ffffff 80%, #ffffff 100%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    animation: letter-in .7s cubic-bezier(.16, 1, .3, 1) forwards,
+               letter-sweep .9s cubic-bezier(.4, 0, .2, 1) 2.05s forwards;
+    animation-delay: calc(1.3s + var(--i) * .1s), 2.05s;
+    will-change: transform, opacity, filter, background-position;
+  }
+  #tag-wrap { position: relative; margin-top: 3.5vh; }
+  #tag {
+    position: relative; z-index: 1;
+    display: inline-block; padding: 10px 42px; border-radius: 999px;
+    border: 1.5px solid rgba(125, 211, 252, .65);
+    background: rgba(11, 26, 51, .45);
+    font-size: 16px; font-weight: 700;
+    letter-spacing: .65em; text-indent: .65em;
+    color: var(--accent);
+    box-shadow: 0 0 32px rgba(125, 211, 252, .35),
+                inset 0 0 22px rgba(125, 211, 252, .15);
+    opacity: 0; transform: translateY(18px) scale(.92);
+    animation: tag-in .5s cubic-bezier(.16, 1, .3, 1) 2.3s forwards;
+    will-change: transform, opacity;
+  }
+  .ring {
+    position: absolute; left: 50%; top: 50%; width: 60vh; height: 60vh;
+    border: 1.5px solid rgba(125, 211, 252, .85);
+    border-radius: 50%; opacity: 0; pointer-events: none;
+    animation: ring .9s cubic-bezier(.16, .6, .3, 1) 2.35s forwards;
+    will-change: transform, opacity;
+  }
+  .ring.r2 { animation-delay: 2.5s; }
+
+  @keyframes mark-in {
+    0%   { opacity: 0; transform: scale(1.6); filter: blur(14px) drop-shadow(0 0 0 transparent) drop-shadow(0 0 0 transparent); }
+    55%  { opacity: 1; }
+    100% { opacity: 1; transform: scale(1);
+           filter: drop-shadow(0 0 18px rgba(255, 255, 255, .85)) drop-shadow(0 0 48px rgba(56, 189, 248, .9)); }
+  }
+  @keyframes letter-in {
+    0%   { opacity: 0; transform: translateY(28px) scale(.92); filter: blur(14px) drop-shadow(0 0 0 transparent); }
+    100% { opacity: 1; transform: translateY(0) scale(1);
+           filter: blur(0) drop-shadow(0 0 14px rgba(125, 211, 252, .9)); }
+  }
+  @keyframes letter-sweep {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
+  @keyframes tag-in {
+    0%   { opacity: 0; transform: translateY(18px) scale(.92); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes ring {
+    0%   { opacity: .85; transform: translate(-50%, -50%) scale(.1); }
+    100% { opacity: 0;   transform: translate(-50%, -50%) scale(1); }
+  }
+  @keyframes word-glow {
+    from { opacity: 1; }
+    to   { opacity: .94; }
+  }
+  @keyframes body-out {
+    to { opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-delay: 0s !important;
+      transition-duration: .01ms !important;
+    }
+    #mark { opacity: 1; transform: none; filter: none; }
+    #word span { opacity: 1; transform: none; filter: none; }
+    #tag { opacity: 1; transform: none; }
+    .ring { display: none; }
+    body { animation: reduced-out .6s ease .01s forwards; }
+  }
+  @keyframes reduced-out {
+    to { opacity: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="scrim" aria-hidden="true"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
+<div id="scene">
+  <div id="mark">੭</div>
+  <div id="word" aria-label="SEVEN"><span style="--i:0">S</span><span style="--i:1">E</span><span style="--i:2">V</span><span style="--i:3">E</span><span style="--i:4">N</span></div>
+  <div id="tag-wrap">
+    <span class="ring" aria-hidden="true"></span>
+    <span class="ring r2" aria-hidden="true"></span>
+    <span id="tag">LIVE</span>
+  </div>
+</div>
+<script>
+"use strict";
+const BOOT_MS = 3400;
+const params = new URLSearchParams(location.search);
+const SILENT = params.get("silent") === "1";
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function finish() {
+  if (document.body.dataset.boot) return;
+  document.body.dataset.boot = "done";
+  try {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.boot) {
+      window.webkit.messageHandlers.boot.postMessage("done");
+    }
+  } catch (_) {}
+}
+setTimeout(finish, REDUCED ? 600 : BOOT_MS);
+
+/* ---- adventure score: synthesised live with WebAudio (no files), ~3.3 s ----
+ * riser into the core (0-0.9 s) -> ignition boom (0.9 s) -> heroic chord with
+ * letter sparkles -> bells as LIVE lands (2.0 s) -> fades with the overlay. ?silent=1 skips. */
+function chime() {
+  if (SILENT) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume();
+    window.__audio = () => ctx.state;
+    const T = ctx.currentTime + 0.05;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.ratio.value = 4;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, T);
+    master.gain.exponentialRampToValueAtTime(0.32, T + 0.25);
+    master.gain.setValueAtTime(0.32, T + 2.7);
+    master.gain.exponentialRampToValueAtTime(0.0001, T + 3.4);
+    master.connect(comp); comp.connect(ctx.destination);
+    const env = (g, at, peak, a, d) => {
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(peak, at + a);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + a + d);
+    };
+    const tone = (type, f, at, peak, a, d, dest = master) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type; o.frequency.value = f;
+      env(g, at, peak, a, d); o.connect(g); g.connect(dest);
+      o.start(at); o.stop(at + a + d + 0.05);
+      return o;
+    };
+    const noise = (at, dur) => {
+      const b = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+      const d = b.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const n = ctx.createBufferSource(); n.buffer = b; n.start(at); return n;
+    };
+    // 1. riser: low saw drone opening up + swelling noise sweep
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.Q.value = 6;
+    lp.frequency.setValueAtTime(180, T); lp.frequency.exponentialRampToValueAtTime(2400, T + 0.9);
+    lp.connect(master);
+    [55, 55.4, 82.4].forEach(f => tone("sawtooth", f, T, 0.22, 0.85, 0.5, lp));
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 3;
+    bp.frequency.setValueAtTime(400, T); bp.frequency.exponentialRampToValueAtTime(6000, T + 0.9);
+    const ng = ctx.createGain(); env(ng, T, 0.25, 0.88, 0.12);
+    noise(T, 1.1).connect(bp); bp.connect(ng); ng.connect(master);
+    // 2. ignition boom: pitch-dropping sub + noise crack
+    const I = T + 0.9;
+    const boom = tone("sine", 120, I, 0.9, 0.01, 1.3);
+    boom.frequency.setValueAtTime(120, I); boom.frequency.exponentialRampToValueAtTime(38, I + 0.8);
+    const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 1500;
+    const cg = ctx.createGain(); env(cg, I, 0.35, 0.005, 0.35);
+    noise(I, 0.5).connect(hp); hp.connect(cg); cg.connect(master);
+    // 3. heroic chord (A - E - A - C# - E): slow-attack pad under the wordmark
+    [110, 164.8, 220, 277.2, 329.6].forEach((f, i) => {
+      tone("triangle", f, I + 0.02, 0.11 - i * 0.012, 0.45, 2.0);
+      tone("sawtooth", f * 1.003, I + 0.02, 0.025, 0.6, 1.8, lp);
+    });
+    // 4. sparkles as each letter lands (0.7 s + i*0.11 s)
+    [1760, 2217.5, 2637, 3520, 2960].forEach((f, i) => tone("sine", f, T + 1.35 + i * 0.1, 0.06, 0.005, 0.35));
+    // 5. bells as LIVE lands
+    [[880, 0], [1318.5, 0.14], [1760, 0.28]].forEach(([f, d]) => tone("sine", f, T + 2.3 + d, 0.14, 0.02, 1.0));
+    oscSafeClose(ctx, 3800);
+  } catch (_) {}
+}
+if (!REDUCED) chime();
+
+/* ---- particles: wide radius convergence into core, flash & sparkle ---- */
+const cv = document.getElementById("fx");
+const cx2d = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function sizeCanvas() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  cx2d.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+sizeCanvas();
+window.addEventListener("resize", sizeCanvas);
+
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rnd = mulberry32(7);
+const N = 180;
+const parts = [];
+for (let i = 0; i < N; i++) {
+  const a = rnd() * Math.PI * 2;
+  const r = 0.25 + rnd() * 0.35; // ~40vw radius
+  parts.push({
+    a, r,
+    scatter: (rnd() - 0.5) * 0.16,
+    drift: (rnd() - 0.5) * 0.6,
+    size: 1.0 + rnd() * 2.8,
+    bright: rnd() < 0.35,
+    wob: rnd() * Math.PI * 2,
+  });
+}
+
+function easeInOut(t) { return t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+let t0 = 0;
+function frame(now) {
+  if (!t0) t0 = now;
+  const t = (now - t0) / 1000;
+  const mr = document.getElementById("mark").getBoundingClientRect();
+  const cx = W / 2, cy = mr.height ? mr.top + mr.height * 0.52 : H * 0.35;
+  const unit = Math.min(W, H);
+
+  cx2d.clearRect(0, 0, W, H);
+  cx2d.globalCompositeOperation = "lighter";
+
+  // deep-space glow behind the core
+  const pulse = t < 1.1 ? easeOut(t / 1.1) : 1 + Math.sin((t - 1.1) * 2.2) * 0.05;
+  const glowR = unit * 0.65 * pulse;
+  const glow = cx2d.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, glowR));
+  const gi = Math.min(1, t / 0.5);
+  glow.addColorStop(0, `rgba(125,211,252,${0.42 * gi})`);
+  glow.addColorStop(0.35, `rgba(56,189,248,${0.18 * gi})`);
+  glow.addColorStop(1, "rgba(8,18,40,0)");
+  cx2d.fillStyle = glow;
+  cx2d.fillRect(0, 0, W, H);
+
+  // ignition flash at 0.9s (core convergence peak)
+  if (t >= 0.75 && t < 1.3) {
+    const ft = (t - 0.75) / 0.55;
+    const fr = unit * (0.08 + easeOut(ft) * 0.40);
+    const flash = cx2d.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, fr));
+    flash.addColorStop(0, `rgba(255,255,255,${0.75 * (1 - ft)})`);
+    flash.addColorStop(0.4, `rgba(125,211,252,${0.45 * (1 - ft)})`);
+    flash.addColorStop(1, "rgba(125,211,252,0)");
+    cx2d.fillStyle = flash;
+    cx2d.beginPath();
+    cx2d.arc(cx, cy, fr, 0, Math.PI * 2);
+    cx2d.fill();
+  }
+  // shockwave: a bright ring racing out from the core at ignition
+  if (t >= 0.85 && t < 1.8) {
+    const st = (t - 0.85) / 0.95;
+    cx2d.strokeStyle = `rgba(186,230,253,${0.9 * (1 - st)})`;
+    cx2d.lineWidth = 3 + 10 * (1 - st);
+    cx2d.beginPath();
+    cx2d.arc(cx, cy, unit * (0.06 + easeOut(st) * 0.75), 0, Math.PI * 2);
+    cx2d.stroke();
+  }
+
+  // particles: wide radius convergence -> flash -> sparkle outward
+  for (const p of parts) {
+    let rr, alpha;
+    if (t < 0.9) {
+      const k = easeInOut(Math.min(1, t / 0.9));
+      rr = (1 - k) * p.r + 0.015;
+      alpha = k * 0.85;
+    } else if (t < 1.2) {
+      rr = 0.015 + p.scatter * 0.2;
+      alpha = 0.85 + 0.15 * Math.sin(t * 40 + p.wob);
+    } else {
+      const k = Math.min(1, (t - 1.2) / 1.2);
+      rr = 0.015 + p.scatter * 0.2 + easeOut(k) * (0.42 + p.scatter);
+      alpha = (1 - k) * 0.85;
+    }
+    if (alpha <= 0.004) continue;
+    const ang = p.a + (t > 1.2 ? p.drift * (t - 1.2) : 0);
+    const px = cx + Math.cos(ang) * rr * W;
+    const py = cy + Math.sin(ang) * rr * H * 0.82;
+    const sz = p.size * (p.bright ? 1.6 : 1.2);
+    cx2d.fillStyle = p.bright
+      ? `rgba(255,255,255,${alpha})`
+      : `rgba(125,211,252,${alpha * 0.85})`;
+    cx2d.beginPath();
+    cx2d.arc(px, py, sz, 0, Math.PI * 2);
+    cx2d.fill();
+  }
+
+  cx2d.globalCompositeOperation = "source-over";
+  if (!REDUCED) requestAnimationFrame(frame);
+}
+if (!REDUCED) requestAnimationFrame(frame);
+</script>
+</body>
+</html>

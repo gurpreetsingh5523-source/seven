@@ -1,0 +1,2653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7 Live</title>
+<style>
+  /* ---- design tokens (M15a) ------------------------------------------------
+   * Dark-first, one accent colour, everything as CSS custom properties so a
+   * light theme is only a variable swap. body[data-state] carries the current
+   * conversation state; the orb colours themselves come from live_core.js.
+   */
+  :root {
+    color-scheme: dark;
+    --bg: #05070b;
+    --surface: #0c111a;
+    --surface-2: #131a26;
+    --line: #1d2634;
+    --fg: #e8edf5;
+    --muted: #9aa6b8;
+    --accent: #7dd3fc;
+    --accent-ink: #06121f;
+    --accent-dim: rgba(125, 211, 252, .16);
+    --ok: #6ee7b7;
+    --warn: #fcd34d;
+    --danger: #fca5a5;
+    --radius: 14px;
+    --radius-s: 9px;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  /* the stage (orb canvas) always paints deep space, so the page stays dark
+   * in both themes: no white panels next to a black stage. */
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: dark;
+      --bg: #05070b;
+      --surface: #0c111a;
+      --surface-2: #131a26;
+      --line: #1d2634;
+      --fg: #e8edf5;
+      --muted: #9aa6b8;
+      --accent: #7dd3fc;
+      --accent-ink: #06121f;
+      --accent-dim: rgba(125, 211, 252, .16);
+      --ok: #6ee7b7;
+      --warn: #fcd34d;
+      --danger: #fca5a5;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; height: 100dvh; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.55 var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
+  /* ---- layout: stage (orb + captions) / work (side panel) / dock ---------- */
+  #app {
+    display: grid; height: 100dvh;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-areas: "status work" "stage work" "dock work";
+  }
+  #status {
+    grid-area: status; display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--line); background: var(--surface);
+  }
+  #status .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--muted);
+    transition: background .3s ease;
+  }
+  body[data-state="ready"] #status .dot { background: var(--accent); }
+  body[data-state="listening"] #status .dot { background: var(--ok); }
+  body[data-state="thinking"] #status .dot { background: var(--warn); }
+  body[data-state="speaking"] #status .dot { background: var(--ok); }
+  body[data-state="muted"] #status .dot { background: var(--muted); }
+  body[data-state="paused"] #status .dot { background: var(--warn); }
+  body[data-state="reconnecting"] #status .dot { background: var(--warn); }
+  body[data-state="error"] #status .dot { background: var(--danger); }
+  #brain { font-weight: 600; color: var(--fg); }
+  #jobs-count { color: var(--muted); }
+  #level {
+    flex: none; display: block; width: 90px; height: 4px; border-radius: 2px;
+    background: var(--line); overflow: hidden; position: relative;
+  }
+  #level i {
+    position: absolute; inset: 0; border-radius: 2px; background: var(--accent);
+    transform: scaleX(0); transform-origin: left center;
+    transition: transform 90ms linear;
+  }
+  #status .spacer { flex: 1; }
+  #mode {
+    display: none; letter-spacing: .14em; text-transform: uppercase;
+    font-size: 10px; padding: 2px 10px; border-radius: 999px;
+    border: 1px solid var(--warn); color: var(--warn);
+    background: var(--surface-2);
+  }
+  #mode.offline { display: inline-block; }
+
+  #stage {
+    grid-area: stage; position: relative; min-height: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  #orb { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* HUD pinned to the lower third of the stage; the orb core (centre) stays clear */
+  #hud {
+    position: absolute; z-index: 2; inset: 0;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: flex-end; gap: 12px; padding: 0 0 18px;
+    pointer-events: none;
+  }
+  #hud > * { pointer-events: auto; }
+
+  /* state word: large, calm, coloured per body[data-state]; sits below the core */
+  #state {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 12px; font-weight: 600; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--muted);
+    transition: color .3s ease;
+    pointer-events: none;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, .85);
+  }
+  #state::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted); transition: background .3s ease;
+  }
+  body[data-state="ready"] #state { color: var(--accent); }
+  body[data-state="ready"] #state::before { background: var(--accent); }
+  body[data-state="listening"] #state { color: var(--ok); }
+  body[data-state="listening"] #state::before { background: var(--ok); }
+  body[data-state="thinking"] #state { color: var(--warn); }
+  body[data-state="thinking"] #state::before { background: var(--warn); }
+  body[data-state="speaking"] #state { color: var(--ok); }
+  body[data-state="speaking"] #state::before { background: var(--ok); }
+  body[data-state="muted"] #state { color: var(--muted); }
+  body[data-state="paused"] #state { color: var(--warn); }
+  body[data-state="paused"] #state::before { background: var(--warn); }
+  body[data-state="reconnecting"] #state { color: var(--warn); }
+  body[data-state="reconnecting"] #state::before { background: var(--warn); }
+  body[data-state="error"] #state { color: var(--danger); }
+  body[data-state="error"] #state::before { background: var(--danger); }
+
+  /* captions: the conversation, readable at a glance — a very subtle strip
+   * pinned below the orb core; invisible while empty so the orb stays clear */
+  #captions {
+    width: min(640px, calc(100vw - 40px)); max-height: calc(6.5 * 1.6em);
+    overflow-y: auto; padding: 14px 18px; border-radius: var(--radius);
+    background: rgba(0, 0, 0, .10); border: none;
+    font-size: 16.5px; scrollbar-width: thin;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .9);
+  }
+  #captions:empty { display: none; }
+  #captions .line { margin: 3px 0; }
+  #captions .line.you { color: var(--accent); }
+  #captions .line.seven { color: var(--fg); }
+  #captions .who {
+    font-weight: 600; font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); margin-right: .5em;
+  }
+
+  /* dock: the bottom bar of primary actions */
+  #dock {
+    grid-area: dock; display: flex; align-items: center; justify-content: center;
+    gap: 10px; padding: 12px 18px;
+    border-top: 1px solid var(--line); background: var(--surface);
+  }
+  #composer {
+    display: flex; gap: 8px; flex: 0 1 560px; min-width: 0;
+  }
+  #say {
+    flex: 1; min-width: 0; padding: 10px 16px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--surface-2);
+    color: var(--fg); font: inherit; outline: none;
+  }
+  #say::placeholder { color: var(--muted); }
+  #say:focus { border-color: var(--accent); }
+  .dbtn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 40px; padding: 9px 16px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--surface-2);
+    color: var(--fg); font: 600 13px var(--font);
+    transition: background .2s ease, border-color .2s ease, transform .1s ease;
+  }
+  .dbtn:hover { background: var(--accent-dim); border-color: var(--accent); }
+  .dbtn:active { transform: scale(.97); }
+  .dbtn svg { width: 16px; height: 16px; flex: none; }
+  #mute.muted, .vbtn.on {
+    background: rgba(220, 60, 60, .18); border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  /* settings panel: form widgets live here, never loose in the dock */
+  #settings-panel {
+    display: none; position: fixed; right: 16px; bottom: 70px; z-index: 12;
+    width: min(320px, calc(100vw - 32px));
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 16px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+  }
+  #settings-panel.open { display: block; }
+  #settings-panel h3 {
+    margin: 0 0 10px; font-size: 12px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  }
+  #settings-panel label {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 7px 0; font-size: 13.5px; color: var(--fg);
+  }
+  #settings-panel label + label { border-top: 1px solid var(--line); }
+  #voice, #orb-style {
+    background: var(--surface-2); color: var(--fg); font: inherit;
+    border: 1px solid var(--line); border-radius: var(--radius-s); padding: 5px 8px;
+  }
+  #music-vol { width: 110px; accent-color: var(--accent); }
+  #music, #cues, #starfield { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  /* work: side panel with the jobs timeline and approval cards */
+  #work {
+    grid-area: work; display: flex; flex-direction: column; min-height: 0;
+    background: var(--surface); border-left: 1px solid var(--line);
+  }
+  #work > h2 {
+    margin: 0; padding: 14px 18px 10px;
+    font-size: 12px; font-weight: 600; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  #jobs {
+    flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+    display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
+  }
+  #jobs:empty::after {
+    content: "Nothing running. Jobs 7 works on will appear here.";
+    color: var(--muted); font-size: 13px; padding: 8px 4px;
+  }
+  .job-card {
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--radius-s); padding: 10px 12px; cursor: pointer;
+    font-size: 13px;
+  }
+  .job-card .j-task { font-weight: 600; color: var(--fg); }
+  .job-card .j-meta {
+    color: var(--muted); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .job-card.running { border-left: 2px solid var(--warn); }
+  .job-card.running .j-meta { color: var(--warn); }
+  .job-card.done { border-left: 2px solid var(--ok); }
+  .job-card.done .j-meta { color: var(--ok); }
+  .job-card.failed { border-left: 2px solid var(--danger); }
+  .job-card.failed .j-meta { color: var(--danger); }
+  .job-card .j-reply {
+    display: none; margin-top: 8px; color: var(--fg); white-space: pre-wrap;
+    max-height: 12em; overflow-y: auto; font-size: 12.5px;
+    border-top: 1px solid var(--line); padding-top: 8px;
+  }
+  .job-card.open .j-reply { display: block; }
+  #approvals {
+    flex: none; max-height: 45%; overflow-y: auto; scrollbar-width: thin;
+    display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
+    border-top: 1px solid var(--line);
+  }
+  #approvals:empty { display: none; }
+  .approval-card {
+    background: var(--surface-2);
+    border: 1px solid var(--warn); border-radius: var(--radius-s);
+    padding: 12px 14px;
+  }
+  .approval-card .a-title { font-weight: 600; color: var(--warn); margin-bottom: 4px; }
+  .approval-card .a-risk {
+    display: inline-block; font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 999px;
+    margin-bottom: 8px; border: 1px solid var(--warn); color: var(--warn);
+  }
+  .approval-card .a-payload {
+    font: 12px var(--mono); color: var(--muted); word-break: break-all;
+    max-height: 5.5em; overflow-y: auto; margin-bottom: 10px; white-space: pre-wrap;
+  }
+  .approval-card .a-buttons { display: flex; gap: 8px; }
+  .approval-card button {
+    flex: 1; padding: 8px 0; border-radius: 999px; cursor: pointer;
+    font: 600 13px var(--font); border: 1px solid var(--line);
+  }
+  .approval-card .a-yes {
+    background: rgba(16, 120, 80, .28); color: var(--ok);
+    border-color: var(--ok);
+  }
+  .approval-card .a-no {
+    background: rgba(180, 40, 40, .22); color: var(--danger);
+    border-color: var(--danger);
+  }
+
+  #work-toggle { display: none; }
+
+  /* news panels (M16): 7's own screen, inside the work panel above the jobs */
+  #news, #news-live {
+    flex: none; display: none; flex-direction: column; gap: 6px;
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+    max-height: 45%; overflow-y: auto; scrollbar-width: thin;
+  }
+  #news.on, #news-live.on { display: flex; }
+  #news h3, #news-live h3 {
+    margin: 0; font-size: 10.5px; font-weight: 600; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #news ul { list-style: none; margin: 0; padding: 0; }
+  #news li { margin: 0; padding: 5px 0; font-size: 13px; line-height: 1.4; }
+  #news li + li { border-top: 1px solid var(--line); }
+  #news a { color: var(--fg); text-decoration: none; }
+  #news a:hover { color: var(--accent); text-decoration: underline; }
+  #news .news-meta {
+    display: block; color: var(--muted); font-size: 10.5px;
+    letter-spacing: .06em; margin-top: 1px;
+  }
+  #news-live iframe {
+    display: block; width: 100%; aspect-ratio: 16 / 9; height: auto;
+    border: 1px solid var(--line); border-radius: var(--radius-s);
+    background: var(--surface-2);
+  }
+
+  /* overlays and badges */
+  #vision-badge {
+    display: none; position: fixed; top: 52px; left: 16px; z-index: 9;
+    padding: 5px 14px; border-radius: 999px; font: 600 12px/1.4 var(--font);
+    letter-spacing: .06em; color: var(--danger);
+    background: var(--surface); border: 1px solid var(--danger);
+    animation: vision-pulse 1.6s ease-in-out infinite;
+  }
+  #vision-badge.on { display: inline-block; }
+  @keyframes vision-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+  #drop {
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  #drop.over { border-color: var(--accent); color: var(--accent); }
+
+  #drop-overlay {
+    display: none; position: fixed; inset: 0; z-index: 20;
+    align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border: 2px dashed var(--accent); border-radius: 0;
+  }
+  #drop-overlay.show { display: flex; }
+  #drop-overlay .drop-inner {
+    text-align: center; color: var(--accent);
+    font-size: 17px; font-weight: 600; pointer-events: none;
+  }
+  #drop-overlay .drop-inner svg {
+    width: 44px; height: 44px; display: block; margin: 0 auto 10px;
+  }
+  #drop-overlay .drop-sub {
+    display: block; margin-top: 4px; font-size: 12.5px;
+    font-weight: 400; color: var(--muted);
+  }
+
+  #resume {
+    display: none; position: fixed; bottom: 76px; left: 50%;
+    transform: translateX(-50%); z-index: 9;
+    padding: 10px 26px; border-radius: 999px; cursor: pointer;
+    font: 600 14px var(--font); color: var(--warn);
+    background: var(--surface); border: 1px solid var(--warn);
+  }
+  #resume.on { display: inline-block; }
+
+  /* pre-Start: no card — the Start button floats on the orb itself */
+  #overlay {
+    position: fixed; inset: 0; z-index: 30;
+    display: flex; flex-direction: column; gap: 14px;
+    align-items: center; justify-content: center;
+    background: transparent;
+    pointer-events: none;
+  }
+  #overlay.hidden { display: none; }
+  #overlay button {
+    font: 600 17px var(--font); padding: 15px 46px; border: 0;
+    border-radius: 999px; color: var(--accent-ink);
+    background: var(--accent); cursor: pointer;
+    pointer-events: auto;
+    box-shadow: 0 0 36px rgba(125, 211, 252, .45);
+    transition: transform .15s ease, opacity .2s ease;
+  }
+  #overlay button:hover { transform: scale(1.03); }
+  #overlay button:active { transform: scale(.97); }
+  #overlay .overlay-hint {
+    font-size: 13px; color: var(--muted); pointer-events: none;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .9);
+  }
+
+  #debug {
+    display: none; position: fixed; left: 8px; bottom: 6px; z-index: 5;
+    font: 11px var(--mono); color: var(--muted);
+  }
+
+  /* ---- mobile: work panel becomes a drawer, orb stays visible ------------- */
+  @media (max-width: 700px) {
+    #app {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "status" "stage" "dock";
+    }
+    #work {
+      position: fixed; top: 0; right: 0; bottom: 0; z-index: 15;
+      width: min(320px, 86vw);
+      visibility: hidden;
+      transform: translateX(105%);
+      transition: none;
+      box-shadow: -12px 0 40px rgba(0, 0, 0, .35);
+    }
+    #work.open {
+      visibility: visible;
+      transform: translateX(0);
+      transition: none;                    /* open instantly: the panel is there NOW */
+    }
+    #work:not(.open) {
+      transition: transform .28s cubic-bezier(.32, .72, .24, 1), visibility 0s linear .28s;
+    }
+    #work-toggle { display: inline-flex; }
+    #captions { font-size: 15px; width: calc(100vw - 32px); }
+    /* one compact row: icon-only buttons (labels via aria-label), composer flexible */
+    #dock { flex-wrap: nowrap; gap: 6px; padding: 8px 10px; }
+    #composer { flex: 1 1 auto; min-width: 0; }
+    #say { padding: 8px 12px; }
+    .dbtn { min-height: 36px; padding: 8px 10px; }
+    .dbtn span { display: none; }
+    #settings-panel { right: 8px; bottom: 118px; }
+  }
+</style>
+</head>
+<body data-state="ready">
+<div id="app">
+  <header id="status">
+    <span class="dot" aria-hidden="true"></span>
+    <span id="brain">Gemini Live</span>
+    <span id="level" aria-hidden="true"><i></i></span>
+    <span class="spacer"></span>
+    <span id="jobs-count"></span>
+    <span id="mode">offline</span>
+  </header>
+
+  <main id="stage">
+    <canvas id="orb"></canvas>
+    <div id="hud">
+      <div id="state">Ready — tap Start to talk</div>
+      <div id="captions" aria-live="polite"></div>
+    </div>
+  </main>
+
+  <aside id="work" aria-label="Work">
+    <h2>Work</h2>
+    <div id="news" hidden></div>
+    <div id="news-live" hidden></div>
+    <div id="jobs"></div>
+    <div id="approvals"></div>
+  </aside>
+
+  <footer id="dock">
+    <div id="composer">
+      <input id="say" type="text" placeholder="Type to 7 — Enter to send" autocomplete="off">
+      <button id="mute" class="dbtn" type="button" aria-label="Mute">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+        <span id="mute-label">Mute</span>
+      </button>
+    </div>
+    <button id="drop" class="dbtn" type="button" aria-label="Share a file">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg>
+      <span>File</span>
+    </button>
+    <button id="share-screen" class="dbtn vbtn" type="button" aria-label="Share screen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <span>Screen</span>
+    </button>
+    <button id="share-camera" class="dbtn vbtn" type="button" aria-label="Share camera">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+      <span>Camera</span>
+    </button>
+    <button id="work-toggle" class="dbtn" type="button" aria-expanded="false" aria-controls="work" aria-label="Work panel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
+      <span>Work</span>
+    </button>
+    <button id="settings" class="dbtn" type="button" aria-expanded="false" aria-controls="settings-panel" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.2"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.2"/></svg>
+    </button>
+  </footer>
+</div>
+
+<div id="settings-panel" role="group" aria-label="Settings">
+  <h3>Settings</h3>
+  <label>Voice
+    <select id="voice">
+      <option value="Charon">Charon</option>
+      <option value="Puck">Puck</option>
+      <option value="Kore">Kore</option>
+      <option value="Fenrir">Fenrir</option>
+      <option value="Aoede">Aoede</option>
+      <option value="Orus">Orus</option>
+      <option value="Iapetus">Iapetus</option>
+      <option value="Enceladus">Enceladus</option>
+    </select>
+  </label>
+  <label>Ambient music <input id="music" type="checkbox"></label>
+  <label>Music volume <input id="music-vol" type="range" min="0" max="100" value="35"></label>
+  <label>Sound cues <input id="cues" type="checkbox" checked></label>
+  <label>Orb
+    <select id="orb-style">
+      <option value="mesh">Quantum mesh</option>
+      <option value="mesh-orbits">Quantum mesh + orbits</option>
+      <option value="particles">Voice Orb</option>
+      <option value="glow">Glow orb</option>
+    </select>
+  </label>
+  <label>Starfield <input id="starfield" type="checkbox" checked></label>
+</div>
+
+<div id="drop-overlay" aria-hidden="true">
+  <div class="drop-inner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg>
+    Drop a file to share it with 7
+    <span class="drop-sub">Images are shown to 7, text files are read aloud. Max 10 MB.</span>
+  </div>
+</div>
+
+<div id="vision-badge"></div>
+<div id="debug"></div>
+<button id="resume" type="button">Resume listening</button>
+<input id="file-pick" type="file" hidden>
+<div id="overlay">
+  <button id="start" type="button">Start</button>
+  <span class="overlay-hint">One click, then just talk.</span>
+</div>
+
+<script src="/live_core.js"></script>
+<script>
+// Centre the pre-Start button on the orb (= the stage), not on the whole window: on desktop the
+// Work panel takes the right side, so window-centre sat ~170 px right of the orb.
+(() => {
+  const fit = () => {
+    const st = document.getElementById('stage'), ov = document.getElementById('overlay');
+    if (!st || !ov) return;
+    const r = st.getBoundingClientRect();
+    Object.assign(ov.style, {inset: 'auto', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px'});
+  };
+  addEventListener('resize', fit); addEventListener('load', fit); fit();
+})();
+</script>
+<script>
+"use strict";
+/* 7 Live page: mic -> PCM16 16 kHz -> ws /live -> Gemini; PCM16 24 kHz -> speaker.
+ * Visuals: "universe" orb (canvas), sentence captions, mute, text input. */
+
+const { STATES, STATE_STYLE, STATE_WORD, labelFor,
+        mergeCaption, endTurn, orbParams, duckVolume, cueFor } = liveCore;
+
+const MIC_RATE = 16000;        // up:   PCM16 mono 16 kHz
+const SPEAKER_RATE = 24000;    // down: PCM16 mono 24 kHz
+const FRAME_MS = 100;          // ~100 ms binary frames up
+const MAX_PARTICLES = 128;     // >= the most orbParams() will ever request
+
+const canvas = document.getElementById("orb");
+const g2d = canvas.getContext("2d");
+const stateEl = document.getElementById("state");
+const modeEl = document.getElementById("mode");
+const captionsEl = document.getElementById("captions");
+const overlay = document.getElementById("overlay");
+const sayEl = document.getElementById("say");
+const muteBtn = document.getElementById("mute");
+const muteLabel = document.getElementById("mute-label");
+const debugEl = document.getElementById("debug");
+const voiceSel = document.getElementById("voice");
+const musicChk = document.getElementById("music");
+const musicVolEl = document.getElementById("music-vol");
+const cuesChk = document.getElementById("cues");
+const orbStyleSel = document.getElementById("orb-style");
+const starfieldChk = document.getElementById("starfield");
+const approvalsEl = document.getElementById("approvals");
+const jobsEl = document.getElementById("jobs");
+const jobsCountEl = document.getElementById("jobs-count");
+const levelEl = document.getElementById("level");
+const levelBar = levelEl.querySelector("i");
+const brainEl = document.getElementById("brain");
+const dropEl = document.getElementById("drop");
+const dropOverlay = document.getElementById("drop-overlay");
+const filePick = document.getElementById("file-pick");
+const resumeBtn = document.getElementById("resume");
+const settingsBtn = document.getElementById("settings");
+const settingsPanel = document.getElementById("settings-panel");
+const workEl = document.getElementById("work");
+const workToggle = document.getElementById("work-toggle");
+
+let ws = null;
+let playCtx = null;
+let micCtx = null;
+let playTime = 0;
+let micStarted = false;
+let muted = false;
+let prevState = "idle";
+let curState = "idle";
+let lines = [];                // caption model: [{who, text, open}]
+let userSpeaking = false;      // mic level above threshold -> duck the music
+let paused = false;            // M13 assistant_pause: mic frames are dropped
+let pauseTimer = null;         // auto-resume after the requested minutes
+
+/* ---- persistence: everything under "seven_" keys, localStorage may fail --- */
+function saveSetting(key, value) {
+  try { localStorage.setItem("seven_" + key, String(value)); } catch (_) {}
+}
+function loadSetting(key, fallback) {
+  try {
+    const v = localStorage.getItem("seven_" + key);
+    return v === null ? fallback : v;
+  } catch (_) { return fallback; }
+}
+function hasConsent() {
+  try { return localStorage.getItem("seven_consent") === "1"; } catch (_) { return false; }
+}
+
+/* ---- audio levels (drive the orb's breathing and the mic meter) ---------- */
+let micAnalyser = null, playAnalyser = null;
+let micBuf = null, playBuf = null;
+let micLevel = 0, playLevel = 0;
+
+function readLevel(analyser, buf) {
+  if (!analyser) return 0;
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.min(1, Math.sqrt(sum / buf.length) * 3.2);
+}
+
+/* ---- M19: three-band audio (low / mid / high) -----------------------------
+ * window.__bands = [low, mid, high], each 0..1, read every frame with
+ * getByteFrequencyData from the analyser of whatever is sounding (7's
+ * playback while it speaks, else the mic). Bands ease toward their target
+ * (fast attack, soft decay to 0 in silence). window.__setBands(arr, ms)
+ * forces targets for ms milliseconds (test hook).
+ */
+let micFreqBuf = null, playFreqBuf = null;
+const bandT = [0, 0, 0];
+window.__bands = [0, 0, 0];
+let bandHoldUntil = 0;
+
+window.__setBands = function (arr, ms) {
+  for (let i = 0; i < 3; i++) {
+    bandT[i] = Math.max(0, Math.min(1, Number(arr && arr[i]) || 0));
+  }
+  bandHoldUntil = performance.now() + (Number(ms) || 0);
+};
+
+function bandsStep(dt, nowMs) {
+  if (nowMs >= bandHoldUntil) {
+    /* pick the analyser that is sounding: playback while 7 speaks, else mic */
+    const an = (curState === "speaking" && playAnalyser) ? playAnalyser : micAnalyser;
+    if (an) {
+      let fb;
+      if (an === playAnalyser) {
+        fb = playFreqBuf || (playFreqBuf = new Uint8Array(an.frequencyBinCount));
+      } else {
+        fb = micFreqBuf || (micFreqBuf = new Uint8Array(an.frequencyBinCount));
+      }
+      an.getByteFrequencyData(fb);
+      const n = fb.length;
+      const third = Math.max(1, Math.floor(n / 3));
+      for (let b = 0; b < 3; b++) {
+        let sum = 0;
+        const lo = b === 2 ? third * 2 : third * b;
+        const hi = b === 2 ? n : lo + third;
+        for (let i = lo; i < hi; i++) sum += fb[i];
+        bandT[b] = sum / ((hi - lo) * 255);
+      }
+    } else {
+      bandT[0] = bandT[1] = bandT[2] = 0;
+    }
+  }
+  const k = Math.min(1, dt * 10);                 // fast attack, soft decay
+  for (let i = 0; i < 3; i++) window.__bands[i] += (bandT[i] - window.__bands[i]) * k;
+}
+
+/* ---- state + captions ------------------------------------------------------
+ * The websocket speaks in internal states (idle, executing, ...). The UI
+ * shows truthful labels via labelFor(): before Start the page says "ready",
+ * "executing" reads as "thinking", a paused assistant says "paused". Every
+ * change is mirrored to body[data-state] so CSS can colour the stage.
+ */
+function applyState(name) {
+  curState = name;
+  const ui = paused ? "paused" : labelFor(name);
+  document.body.dataset.state = ui;
+  stateEl.textContent = STATE_WORD[ui] || ui;
+  renderCaptions();
+}
+
+function setState(name) {
+  if (!STATES.includes(name)) name = "error";
+  if (name === "muted" || name === "listening") lines = endTurn(lines);
+  if (name !== "muted") prevState = name;
+  applyState(name);
+}
+
+function caption(who, text) {
+  lines = mergeCaption(lines, who, text);
+  renderCaptions();
+}
+
+/* ---- mode: {"type":"mode"} names the brain in the status strip (SPEC E8) - */
+function setMode(mode) {
+  modeEl.classList.toggle("offline", mode === "offline");
+  brainEl.textContent = mode === "offline" ? "Offline" : "Gemini Live";
+}
+
+/* ---- assistant pause (M13): {"type":"paused","minutes":m} ------------------
+ * While paused the mic keeps running locally but NOT ONE frame is sent to
+ * the server (dropped in the worklet handler); the Resume button brings 7
+ * back early, otherwise listening restarts by itself after <minutes>.
+ */
+function setPaused(minutes) {
+  paused = true;
+  if (pauseTimer) { clearTimeout(pauseTimer); pauseTimer = null; }
+  const mins = Math.max(1, Number(minutes) || 1);
+  resumeBtn.textContent = "Resume listening (paused " + mins + " min)";
+  resumeBtn.classList.add("on");
+  caption("seven", "Paused for " + mins + " minute" + (mins === 1 ? "" : "s") +
+        " — tap Resume or I will come back on my own.");
+  applyState(curState);
+  pauseTimer = setTimeout(resumeListening, mins * 60 * 1000);
+}
+
+function resumeListening() {
+  if (pauseTimer) { clearTimeout(pauseTimer); pauseTimer = null; }
+  if (!paused) return;
+  paused = false;
+  resumeBtn.classList.remove("on");
+  setState(muted ? "muted" : "listening");
+  caption("seven", "Listening again.");
+}
+
+resumeBtn.addEventListener("click", resumeListening);
+
+function renderCaptions() {
+  captionsEl.textContent = "";
+  for (const l of lines.slice(-60)) {
+    const div = document.createElement("div");
+    div.className = "line " + (l.who === "you" ? "you" : "seven");
+    const tag = document.createElement("span");
+    tag.className = "who";
+    tag.textContent = l.who === "you" ? "You" : "7";
+    div.appendChild(tag);
+    div.appendChild(document.createTextNode(l.text));
+    captionsEl.appendChild(div);
+  }
+  captionsEl.scrollTop = captionsEl.scrollHeight;   // newest at the bottom
+}
+
+/* ---- approval cards: Yes/No mirrors the spoken question (SPEC E7) -------- */
+function showApproval(ev) {
+  closeApproval(ev.action_id);               // one card per action_id
+  const card = document.createElement("div");
+  card.className = "approval-card";
+  card.dataset.actionId = ev.action_id;
+  const title = document.createElement("div");
+  title.className = "a-title";
+  title.textContent = "7 asks: " + ev.tool;
+  const risk = document.createElement("div");
+  risk.className = "a-risk";
+  risk.textContent = ev.risk + " risk";
+  const payload = document.createElement("div");
+  payload.className = "a-payload";
+  payload.textContent = JSON.stringify(ev.payload || {}, null, 1);
+  const buttons = document.createElement("div");
+  buttons.className = "a-buttons";
+  for (const [label, ok, cls] of [["Yes", true, "a-yes"], ["No", false, "a-no"]]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = cls;
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "approval", action_id: ev.action_id, approved: ok }));
+      }
+      caption("you", label + " (clicked) — " + ev.tool);
+      closeApproval(ev.action_id);
+    });
+    buttons.appendChild(btn);
+  }
+  card.appendChild(title); card.appendChild(risk);
+  card.appendChild(payload); card.appendChild(buttons);
+  approvalsEl.appendChild(card);
+}
+
+function closeApproval(actionId) {
+  for (const card of approvalsEl.querySelectorAll(".approval-card")) {
+    if (card.dataset.actionId === actionId) card.remove();
+  }
+}
+
+/* ---- jobs timeline (M12): every Hermes job, running -> done/failed --------
+ * The server emits {"type":"job","job_id","task","status","seconds"} when a
+ * job starts and when it finishes, and {"type":"hermes_done","summary"} when
+ * the result is in. One card per job; click it to read the full summary.
+ * A 1 s interval refreshes the elapsed time of running jobs.
+ */
+const jobCards = {};              // job_id -> card element
+const jobRunning = {};            // job_id -> true while status === "running"
+
+function updateJobsCount() {
+  const n = Object.values(jobRunning).filter(Boolean).length;
+  jobsCountEl.textContent = n === 1 ? "1 job running"
+                        : n > 1 ? n + " jobs running" : "";
+}
+
+function upsertJob(ev) {
+  let card = jobCards[ev.job_id];
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "job-card";
+    const task = document.createElement("div");
+    task.className = "j-task";
+    task.textContent = ev.task || "(Hermes job)";
+    const meta = document.createElement("div");
+    meta.className = "j-meta";
+    const reply = document.createElement("div");
+    reply.className = "j-reply";
+    card.appendChild(task); card.appendChild(meta); card.appendChild(reply);
+    card.addEventListener("click", () => card.classList.toggle("open"));
+    jobsEl.prepend(card);         // newest on top
+    jobCards[ev.job_id] = card;
+  }
+  const status = ev.status || "running";
+  jobRunning[ev.job_id] = status === "running";
+  updateJobsCount();
+  card.classList.remove("running", "done", "failed");
+  card.classList.add(status === "running" ? "running"
+                     : status === "done" ? "done" : "failed");
+  card.dataset.seconds = typeof ev.seconds === "number" ? ev.seconds : 0;
+  card.dataset.status = status;
+  card.querySelector(".j-meta").textContent =
+    status + " · " + Number(card.dataset.seconds).toFixed(0) + "s";
+}
+
+setInterval(() => {               // tick the elapsed time of running jobs
+  for (const id of Object.keys(jobRunning)) {
+    if (!jobRunning[id] || !jobCards[id]) continue;
+    const card = jobCards[id];
+    card.dataset.seconds = Number(card.dataset.seconds) + 1;
+    card.querySelector(".j-meta").textContent =
+      card.dataset.status + " · " + Number(card.dataset.seconds).toFixed(0) + "s";
+  }
+}, 1000);
+
+/* ---- drag & drop files (M12): FileReader -> base64 -> {"type":"file"} -----
+ * Max 10 MB (the server enforces it too). Images are shown to 7 as a video
+ * frame; text files arrive as a "[User shared file …]" turn; everything is
+ * saved under ~/.seven/uploads on the server side. M15a: dragging anywhere
+ * over the window shows a full-window overlay; #drop stays as the dock button.
+ */
+const FILE_MAX_BYTES = 10 * 1024 * 1024;
+
+function sendFile(file) {
+  if (!file) return;
+  if (file.size > FILE_MAX_BYTES) {
+    caption("seven", "File too large: " + file.name + " (max 10 MB).");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      caption("seven", "Not connected — try dropping " + file.name + " again.");
+      return;
+    }
+    const b64 = String(reader.result).split(",")[1] || "";
+    ws.send(JSON.stringify({
+      type: "file", name: file.name,
+      mime: file.type || "application/octet-stream", data_b64: b64
+    }));
+  };
+  reader.onerror = () => caption("seven", "Could not read " + file.name + ".");
+  reader.readAsDataURL(file);
+}
+
+function pickFiles(fileList) {
+  if (fileList && fileList[0]) sendFile(fileList[0]);
+}
+
+dropEl.addEventListener("click", () => filePick.click());
+filePick.addEventListener("change", () => { sendFile(filePick.files[0]); filePick.value = ""; });
+
+/* Window-wide drag & drop: the overlay counts nested dragenter/dragleave so
+ * it only hides when the pointer truly leaves the window. */
+let dragDepth = 0;
+function dragHasFiles(e) {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  return !!types && Array.from(types).includes("Files");
+}
+document.addEventListener("dragenter", (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.classList.add("show");
+  dropEl.classList.add("over");
+});
+document.addEventListener("dragover", (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  dropOverlay.classList.add("show");
+});
+document.addEventListener("dragleave", (e) => {
+  if (!dragHasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) {
+    dropOverlay.classList.remove("show");
+    dropEl.classList.remove("over");
+  }
+});
+document.addEventListener("drop", (e) => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.classList.remove("show");
+  dropEl.classList.remove("over");
+  pickFiles(e.dataTransfer && e.dataTransfer.files);
+});
+
+/* ---- settings panel + mobile work drawer (M15a) --------------------------- */
+settingsBtn.addEventListener("click", () => {
+  const open = !settingsPanel.classList.contains("open");
+  settingsPanel.classList.toggle("open", open);
+  settingsBtn.setAttribute("aria-expanded", String(open));
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!settingsPanel.classList.contains("open")) return;
+  if (settingsPanel.contains(e.target) || settingsBtn.contains(e.target)) return;
+  settingsPanel.classList.remove("open");
+  settingsBtn.setAttribute("aria-expanded", "false");
+});
+
+workToggle.addEventListener("click", () => {
+  const open = !workEl.classList.contains("open");
+  workEl.classList.toggle("open", open);
+  workToggle.setAttribute("aria-expanded", String(open));
+});
+
+/* ---- ambient pad: generated live, no audio files ---------------------------
+ * A calm warm drone: a few detuned saw oscillators (A2/E3/C#4, +-4 cents)
+ * through a low-pass filter whose cutoff breathes with a slow LFO. Ducking
+ * dips the gain to ~15% (duckVolume) whenever 7 speaks or the user talks.
+ */
+let musicCtx = null, musicGain = null, musicOn = false, musicBase = 0.35;
+let musicNodes = [];
+
+function startMusic() {
+  if (!playCtx || musicCtx) return;
+  musicCtx = playCtx;                        // share the gesture-unlocked context
+  const ctx = musicCtx;
+  musicGain = ctx.createGain();
+  musicGain.gain.value = 0;
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 420;
+  lp.Q.value = 0.4;
+  lp.connect(musicGain);
+  musicGain.connect(ctx.destination);
+  const notes = [110.0, 164.81, 220.0, 277.18];   // A2 E3 A3 C#4 (A major pad)
+  const dets = [-4, 3, -2, 4];                    // gentle chorus detune (cents)
+  for (let i = 0; i < notes.length; i++) {
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = notes[i];
+    osc.detune.value = dets[i];
+    const g = ctx.createGain();
+    g.gain.value = 0.22 / notes.length;
+    osc.connect(g); g.connect(lp);
+    osc.start();
+    musicNodes.push(osc);
+  }
+  const lfo = ctx.createOscillator();          // slow filter sweep (~0.07 Hz)
+  lfo.type = "sine";
+  lfo.frequency.value = 0.07;
+  const lfoDepth = ctx.createGain();
+  lfoDepth.gain.value = 160;
+  lfo.connect(lfoDepth); lfoDepth.connect(lp.frequency);
+  lfo.start();
+  musicNodes.push(lfo);
+  musicOn = true;
+  musicGain.gain.setTargetAtTime(duckVolume(curState, musicBase, userSpeaking),
+                                 ctx.currentTime, 2.5);   // fade in
+}
+
+function stopMusic() {
+  if (!musicCtx) return;
+  const ctx = musicCtx;
+  musicGain.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
+  const nodes = musicNodes, gain = musicGain;
+  musicCtx = null; musicGain = null; musicNodes = []; musicOn = false;
+  setTimeout(() => {
+    for (const n of nodes) { try { n.stop(); } catch (_) {} try { n.disconnect(); } catch (_) {} }
+    try { gain.disconnect(); } catch (_) {}
+  }, 1600);
+}
+
+function applyMusicDuck() {
+  if (!musicGain || !musicCtx) return;
+  const target = musicOn ? duckVolume(curState, musicBase, userSpeaking) : 0;
+  musicGain.gain.setTargetAtTime(target, musicCtx.currentTime, 0.12);
+}
+setInterval(applyMusicDuck, 120);              // follow state/mic level smoothly
+
+/* ---- sound cues (M9): short WebAudio blips, OUR OWN design, no files -------
+ * One AudioContext is reused; it is created on the first cue (after the user
+ * gesture that starts the page) and resumed lazily. cueFor(event) picks the
+ * cue; "listen" plays when the mic starts. The cues checkbox is remembered
+ * in localStorage as "seven_cues" (default on).
+ *
+ *   listen    soft rising blip      sine 520 -> 780 Hz, 0.18 s
+ *   whoosh    filtered noise sweep  bandpass 300 -> 2400 Hz, 0.35 s
+ *   chirp     two quick high blips  sine 1250 Hz x2, 0.07 s each
+ *   chime     warm two-note bell    triangle E5 -> B5, ~0.7 s decay
+ *   attention gentle double ping    sine 880 Hz x2, 0.14 s apart
+ *   stop      falling blip          sine 660 -> 330 Hz, 0.22 s
+ *   error     low soft buzz         140 + 147 Hz through a lowpass, 0.35 s
+ */
+let cueCtx = null, cuesOn = true;
+
+function _cueContext() {
+  if (!cueCtx || cueCtx.state === "closed") {
+    try { cueCtx = new AudioContext(); } catch (_) { cueCtx = null; }
+  }
+  if (cueCtx && cueCtx.state === "suspended") cueCtx.resume();
+  return cueCtx;
+}
+
+function _tone(ctx, f0, f1, t0, dur, type, peak) {
+  // One enveloped oscillator; f0 -> f1 exponential sweep (f1 === f0 = steady).
+  const osc = ctx.createOscillator();
+  osc.type = type || "sine";
+  osc.frequency.setValueAtTime(Math.max(1, f0), t0);
+  if (f1 && f1 !== f0) osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(peak, t0 + 0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0 + dur + 0.05);
+}
+
+function playCue(name) {
+  if (!cuesOn) return;
+  const ctx = _cueContext();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime + 0.01;
+    if (name === "listen") {                       // soft rising blip
+      _tone(ctx, 520, 780, t, 0.18, "sine", 0.10);
+    } else if (name === "whoosh") {                // filtered noise sweep
+      const n = Math.floor(ctx.sampleRate * 0.35);
+      const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass"; bp.Q.value = 1.2;
+      bp.frequency.setValueAtTime(300, t);
+      bp.frequency.exponentialRampToValueAtTime(2400, t + 0.3);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.18, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      src.connect(bp); bp.connect(g); g.connect(ctx.destination);
+      src.start(t); src.stop(t + 0.4);
+    } else if (name === "chirp") {                 // two quick high blips
+      _tone(ctx, 1250, 1250, t, 0.07, "sine", 0.10);
+      _tone(ctx, 1250, 1250, t + 0.11, 0.07, "sine", 0.10);
+    } else if (name === "chime") {                 // warm two-note bell
+      _tone(ctx, 659.26, 659.26, t, 0.65, "triangle", 0.14);      // E5
+      _tone(ctx, 987.77, 987.77, t + 0.18, 0.70, "triangle", 0.12); // B5
+    } else if (name === "attention") {             // gentle double ping
+      _tone(ctx, 880, 880, t, 0.12, "sine", 0.12);
+      _tone(ctx, 880, 880, t + 0.17, 0.12, "sine", 0.12);
+    } else if (name === "stop") {                  // falling blip
+      _tone(ctx, 660, 330, t, 0.22, "sine", 0.12);
+    } else if (name === "error") {                 // low soft buzz
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass"; lp.frequency.value = 500;
+      lp.connect(ctx.destination);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      g.connect(lp);
+      for (const f of [140, 147]) {                // slight beat = soft buzz
+        const osc = ctx.createOscillator();
+        osc.type = "sawtooth"; osc.frequency.value = f;
+        const og = ctx.createGain(); og.gain.value = 0.5;
+        osc.connect(og); og.connect(g);
+        osc.start(t); osc.stop(t + 0.4);
+      }
+    }
+  } catch (_) { /* cues must never break the page */ }
+}
+
+/* ---- the engine (M16/M16c): no rings any more — the user found the lines --
+ * ugly (2026-10-08); the mesh carries the orb. The engine is now just the
+ * whoosh when work starts and the level that drives the mesh flare: when a
+ * task starts (tool_started, state executing/thinking, job running) the level
+ * surges towards 1 and a whoosh plays (WebAudio only, no files, at most one
+ * per 1.5 s, only with Sound cues on); "listening" lets it decay back.
+ * window.__engine exposes the state for tests.
+ */
+window.__engine = {
+  rings: 0,
+  level: 0,
+  whooshes: 0,
+  reduced: !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches),
+};
+let lastWhooshAt = -1e9;
+let engineTarget = 0;
+
+function whoosh() {
+  if (!cuesOn) return;                       // the Sound cues setting gates it
+  const ctx = _cueContext();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime + 0.01;
+    const dur = 0.6;
+    /* noise burst through a sweeping band-pass filter */
+    const n = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.Q.value = 1.1;
+    bp.frequency.setValueAtTime(220, t);
+    bp.frequency.exponentialRampToValueAtTime(3200, t + dur * 0.85);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.14, t + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(bp); bp.connect(g); g.connect(ctx.destination);
+    src.start(t); src.stop(t + dur + 0.05);
+    /* a low sine rising under it: the engine catching */
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(55, t);
+    osc.frequency.exponentialRampToValueAtTime(150, t + dur);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.05, t + 0.1);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(og); og.connect(ctx.destination);
+    osc.start(t); osc.stop(t + dur + 0.05);
+  } catch (_) { /* sound must never break the page */ }
+}
+
+function engineStart() {
+  engineTarget = 1;
+  const now = performance.now();
+  if (now - lastWhooshAt < 1500) return;     // at most one whoosh per 1.5 s
+  lastWhooshAt = now;
+  window.__engine.whooshes += 1;
+  whoosh();
+}
+
+function engineEvent(ev) {
+  if (!ev || typeof ev.type !== "string") return;
+  if (ev.type === "tool_started") { engineStart(); mesh.work = true; return; }
+  if (ev.type === "job" && ev.status === "running") { engineStart(); return; }
+  if (ev.type === "state") {
+    if (ev.state === "executing" || ev.state === "thinking") engineStart();
+    else if (ev.state === "listening" || ev.state === "idle" || ev.state === "ready") engineTarget = 0;
+    mesh.work = ev.state === "executing" || ev.state === "thinking";   // M16b fast spin
+  }
+}
+
+/* ---- M16b "Quantum mesh": a rotating, deforming 3D wire sphere -------------
+ * Unit-sphere vertices are precomputed once (mesh.lats rows of mesh.lons
+ * points). Each frame the mesh is yawed (plus a slight pitch), every vertex
+ * radius is displaced by a sum of smooth sines/cosines of the position and
+ * time (flowing lobes), projected with a simple perspective divide, then the
+ * latitude and longitude polylines are stroked in 6 depth-alpha buckets (one
+ * path per bucket — not one per segment) with brighter dots at front
+ * vertices. Deform amplitude and spin speed follow the state (eased): big
+ * lobes while speaking, ripples while listening, fast swirl while working.
+ * prefers-reduced-motion: rotation is frozen and the deform is capped at the
+ * listening value. window.__mesh exposes it all for tests.
+ */
+const mesh = (() => {
+  const m = {
+    lats: 44, lons: 88,
+    unit: null,          // precomputed unit-sphere vertices [lat][lon] -> {x,y,z,phi,th}
+    deform: 0.06, spin: 0.12, rotation: 0,
+    deformTarget: 0.06, spinTarget: 0.12,
+    work: false,         // tool_started -> fast spin until a state event says otherwise
+    reduced: !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches),
+    lastRotT: 0,
+    proj: null,          // [lat][lon] -> {x, y, depth}
+    meshPath: null,      // Path2D per alpha bucket, rebuilt each frame
+    dotPath: null,       // same for the vertex dots
+  };
+  m.unit = [];
+  for (let i = 0; i < m.lats; i++) {
+    const phi = Math.PI * i / (m.lats - 1);
+    const sp = Math.sin(phi), cp = Math.cos(phi);
+    const row = [];
+    for (let j = 0; j < m.lons; j++) {
+      const th = 2 * Math.PI * j / m.lons;
+      row.push({ x: sp * Math.cos(th), y: cp, z: sp * Math.sin(th), phi, th });
+    }
+    m.unit.push(row);
+  }
+  return m;
+})();
+
+window.__mesh = { style: "mesh", vertices: 0, deform: mesh.deform,
+                  spin: mesh.spin, rotation: 0, frameMs: 0, flare: 0, bgRings: 0,
+                  starfield: true, starsDrawn: 0 };   // M19: starfield switch + counter
+
+function meshTargets(state, lvl) {
+  if (mesh.reduced) {
+    /* reduced motion: gentle ripples at most, no swirl */
+    return { deform: 0.06, spin: 0 };
+  }
+  if (state === "speaking") return { deform: 0.35 + lvl * 0.18, spin: 0.6 };
+  if (mesh.work || state === "thinking" || state === "executing")
+    return { deform: 0.15 + lvl * 0.06, spin: 1.2 };
+  /* M16d: rest states must spin slowly (<= 0.12 rad/s); the orbit lines
+   * carry the motion now, the mesh just turns gently. */
+  if (state === "listening") return { deform: 0.06 + lvl * 0.04, spin: 0.10 };
+  return { deform: 0.06, spin: 0.12 };                      // idle / ready / other
+}
+
+function paramsColorFor(state) {
+  const s = STATE_STYLE[state] || STATE_STYLE.idle;
+  return s.color;
+}
+
+function meshStep(dt, lvl, nowMs) {
+  const t = meshTargets(curState, lvl);
+  mesh.deformTarget = t.deform;
+  /* M16c flare: work briefly spins the mesh up to ~1.8x its state speed. */
+  mesh.spinTarget = (mesh.work ? 1.2 : t.spin) * (1 + 0.8 * window.__mesh.flare);
+  const k = Math.min(1, dt * 5);                      // ~fast ease to targets
+  mesh.deform += (mesh.deformTarget - mesh.deform) * k;
+  mesh.spin += (mesh.spinTarget - mesh.spin) * k;
+  if (!mesh.reduced && mesh.lastRotT) {
+    mesh.rotation += mesh.spin * Math.max(0, (nowMs - mesh.lastRotT) / 1000);
+  }
+  mesh.lastRotT = nowMs;
+}
+
+/* one frame of the wire sphere; strokeStyle template gets the bucket alpha */
+function meshDraw(ctx, cx, cy, R, nowMs, rgb, alphaScale) {
+  const t = nowMs / 1000;
+  const yaw = mesh.rotation, pitch = 0.35 + 0.05 * Math.sin(t * 0.11);
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw);
+  const cpw = Math.cos(pitch), spw = Math.sin(pitch);
+  const dist = 3.2;                                   // camera distance (units of R)
+  const t1 = t * 0.9, t2 = t * 0.63, t3 = t * 1.31;
+  const { lats, lons } = mesh;
+  const proj = mesh.proj || (mesh.proj = []);
+  const B = 8;                                        // depth-alpha buckets
+  const paths = mesh.meshPath || (mesh.meshPath = []);
+  const dotPaths = mesh.dotPath || (mesh.dotPath = []);
+  for (let b = 0; b < B; b++) {
+    paths[b] = new Path2D();                          // rebuilt each frame
+    dotPaths[b] = new Path2D();
+  }
+  /* deform + rotate + project every vertex. The displacement is a sum of
+   * travelling sin(k*theta + w*t) * sin(m*phi + v*t) waves, so while speaking
+   * 4-6 big lobes/pinches flow around the sphere instead of uniform noise. */
+  const amp = mesh.deform;
+  for (let i = 0; i < lats; i++) {
+    const prow = proj[i] || (proj[i] = []);
+    const urow = mesh.unit[i];
+    for (let j = 0; j < lons; j++) {
+      const u = urow[j];
+      const th = u.th, ph = u.phi;
+      const f = 0.50 * Math.sin(3 * th + t1) * Math.sin(2 * ph - t2)
+              + 0.35 * Math.sin(5 * th - t2) * Math.sin(3 * ph + t3)
+              + 0.25 * Math.sin(2 * th + 2 * ph - t3) * Math.cos(2 * ph + t1);
+      const r = 1 + amp * f;
+      let x = u.x * r, y = u.y * r, z = u.z * r;
+      /* yaw around Y, then a slight pitch around X */
+      const x1 = x * cyw + z * syw, z1 = z * cyw - x * syw;
+      const y2 = y * cpw - z1 * spw, z2 = y * spw + z1 * cpw;
+      const s = dist / (dist - z2);
+      const pt = prow[j] || (prow[j] = { x: 0, y: 0, depth: 0 });
+      pt.x = cx + x1 * s * R;
+      pt.y = cy + y2 * s * R;
+      pt.depth = Math.max(0, Math.min(1, (z2 / 1.5 + 1) / 2));
+    }
+  }
+  const bucket = (d) => Math.min(B - 1, Math.floor(d * B));
+  const latFade = (i) => {
+    /* latitude lines fade out near the poles (multiply by sin(phi)); the two
+     * rings nearest each pole are skipped entirely so no concentric circles
+     * collapse onto a single point. */
+    const phi = Math.PI * i / (lats - 1);
+    return Math.pow(Math.max(0, Math.sin(phi)), 1.2);
+  };
+  /* latitude polylines (closed loops; skip the 2 rings nearest each pole) */
+  for (let i = 2; i < lats - 2; i++) {
+    const row = proj[i];
+    const fade = latFade(i);
+    if (fade < 0.02) continue;
+    for (let b = 0; b < B; b++) {
+      const p = paths[b];
+      for (let j = 0; j < lons; j++) {
+        if (bucket(row[j].depth) !== b) continue;
+        const j1 = (j + 1) % lons;
+        if (bucket(row[j1].depth) !== b) continue;
+        p.moveTo(row[j].x, row[j].y);
+        p.lineTo(row[j1].x, row[j1].y);
+      }
+    }
+  }
+  /* longitude polylines (pole to pole) */
+  for (let j = 0; j < lons; j++) {
+    for (let b = 0; b < B; b++) {
+      const p = paths[b];
+      for (let i = 0; i < lats - 1; i++) {
+        if (bucket(proj[i][j].depth) !== b) continue;
+        if (bucket(proj[i + 1][j].depth) !== b) continue;
+        p.moveTo(proj[i][j].x, proj[i][j].y);
+        p.lineTo(proj[i + 1][j].x, proj[i + 1][j].y);
+      }
+    }
+  }
+  /* vertex dots, tiny, brighter towards the front (skip the poles themselves) */
+  for (let i = 2; i < lats - 2; i++) {
+    for (let j = 0; j < lons; j++) {
+      const pt = proj[i][j];
+      const b = bucket(pt.depth);
+      const rr = 0.4 + pt.depth * 0.7;
+      dotPaths[b].moveTo(pt.x + rr, pt.y);
+      dotPaths[b].arc(pt.x, pt.y, rr, 0, Math.PI * 2);
+    }
+  }
+  const [cr, cg, cb] = rgb;
+  /* depth: back of the mesh much fainter than the front, front strokes a
+   * little whiter so the 3D shape reads clearly. */
+  for (let b = 0; b < B; b++) {
+    const d = b / (B - 1);
+    const a = (0.08 + 0.52 * d * d) * alphaScale;      // 0.08 back -> 0.60 front
+    const wh = d * d * 0.55;                            // front lines whiter
+    const lr = Math.round(cr + (255 - cr) * wh);
+    const lg = Math.round(cg + (255 - cg) * wh);
+    const lb = Math.round(cb + (255 - cb) * wh);
+    ctx.strokeStyle = `rgba(${lr},${lg},${lb},${a})`;
+    ctx.lineWidth = 0.6;
+    ctx.stroke(paths[b]);
+    ctx.fillStyle = `rgba(${lr},${lg},${lb},${Math.min(1, a * 1.5)})`;
+    ctx.fill(dotPaths[b]);
+  }
+  window.__mesh.vertices = lats * lons;
+}
+
+/* ---- M19 "Voice Orb": a sphere of ~4600 glowing particles that reacts ----
+ * to sound in three frequency bands: LOW swells the radius, MID ripples the
+ * surface (waves), HIGH throws sparks off the edge. The state colour is mixed
+ * toward white; a bright core sits in the centre. All unit-sphere positions,
+ * wave phases and twinkles are precomputed once; points are drawn batched in
+ * 6 depth-alpha buckets (one path per bucket, no per-point gradients), then
+ * the edge sparks. prefers-reduced-motion: radius/wave stay at their rest
+ * values and no sparks fly. window.__particles exposes it for tests.
+ */
+const vorb = (() => {
+  const COUNT = 4600;
+  const reduced = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const rr = mulberry32(20261019);
+  const px = new Float32Array(COUNT), py = new Float32Array(COUNT), pz = new Float32Array(COUNT);
+  const wph = new Float32Array(COUNT), wfr = new Float32Array(COUNT);   // surface-wave phase/freq
+  const twp = new Float32Array(COUNT), twf = new Float32Array(COUNT);   // twinkle phase/freq
+  const tint = new Float32Array(COUNT);                                 // white-mix amount
+  /* uniform-ish sphere points: cos(theta) uniform in [-1,1] */
+  for (let i = 0; i < COUNT; i++) {
+    const z = 1 - 2 * (i + 0.5) / COUNT;
+    const th = Math.PI * (3 - Math.sqrt(5)) * i;                        // golden-angle spiral
+    const rxy = Math.sqrt(Math.max(0, 1 - z * z));
+    px[i] = rxy * Math.cos(th); py[i] = z; pz[i] = rxy * Math.sin(th);
+    wph[i] = rr() * Math.PI * 2; wfr[i] = 1.4 + rr() * 2.4;
+    twp[i] = rr() * Math.PI * 2; twf[i] = 0.5 + rr() * 1.4;
+    tint[i] = rr() * 0.6;
+  }
+  const SPMAX = 96;                                     // live spark pool
+  const sparks = [];
+  for (let i = 0; i < SPMAX; i++) sparks.push({ x: 0, y: 0, vx: 0, vy: 0, age: 1e9, life: 1 });
+  const BUCKETS = 6;
+  return { COUNT, reduced, px, py, pz, wph, wfr, twp, twf, tint,
+           sparks, SPMAX, BUCKETS, rot: 0, lastT: 0 };
+})();
+
+window.__particles = { count: vorb.COUNT, radius: 1, wave: 0.03, sparks: 0, frameMs: 0 };
+
+function vorbDraw(ctx, cx, cy, R, nowMs, rgb, lvl, breathe) {
+  const frameStart = performance.now();
+  const P = window.__particles;
+  const t = nowMs / 1000;
+  const dt = vorb.lastT ? Math.min(0.05, t - vorb.lastT) : 0.016;
+  vorb.lastT = t;
+  if (!vorb.reduced) vorb.rot += dt * 0.10;             // slow turn
+
+  /* the three bands drive radius / waves / sparks (fixed at rest values
+   * under reduced motion) */
+  const [lo, mid, hi] = window.__bands;
+  P.radius = vorb.reduced ? 1 : 1 + 0.45 * lo;
+  P.wave   = vorb.reduced ? 0.03 : 0.03 + 0.30 * mid;
+  const sparkTarget = vorb.reduced ? 0 : Math.round(1 + hi * 63);
+
+  /* state colour mixed toward white (a fixed white bias + per-point tint) */
+  const WB = 0.45;
+  const cr = rgb[0] + (255 - rgb[0]) * WB;
+  const cg = rgb[1] + (255 - rgb[1]) * WB;
+  const cb = rgb[2] + (255 - rgb[2]) * WB;
+
+  const Rp = R * 0.95 * P.radius;
+  const yaw = vorb.rot, cyw = Math.cos(yaw), syw = Math.sin(yaw);
+  const pitch = 0.4, cpw = Math.cos(pitch), spw = Math.sin(pitch);
+  const dist = 3.2;
+  const wAmp = P.wave, t1 = t * 0.9;
+  const NB = vorb.BUCKETS;
+  const paths = [];
+  for (let b = 0; b < NB; b++) paths[b] = new Path2D();
+  for (let i = 0; i < vorb.COUNT; i++) {
+    const wob = 1 + wAmp * Math.sin(t * vorb.wfr[i] + vorb.wph[i]);
+    const x = vorb.px[i] * wob, y = vorb.py[i] * wob, z = vorb.pz[i] * wob;
+    const x1 = x * cyw + z * syw, z1 = z * cyw - x * syw;
+    const y2 = y * cpw - z1 * spw, z2 = y * spw + z1 * cpw;
+    const s = dist / (dist - z2);
+    const sx = cx + x1 * s * Rp, sy = cy + y2 * s * Rp;
+    const depth = (z2 / 1.5 + 1) / 2;
+    const b = depth <= 0 ? 0 : depth >= 1 ? NB - 1 : (depth * NB) | 0;
+    const sz = 0.7 + depth * 1.4;
+    paths[b].moveTo(sx + sz, sy);
+    paths[b].arc(sx, sy, sz, 0, Math.PI * 2);
+  }
+  ctx.lineCap = "round";
+  for (let b = 0; b < NB; b++) {
+    const d = (b + 0.5) / NB;
+    const a = (0.06 + 0.44 * d * d) * (0.75 + lvl * 0.5);
+    const wh = 0.25 + d * 0.35;
+    const lr2 = Math.round(cr + (255 - cr) * wh);
+    const lg2 = Math.round(cg + (255 - cg) * wh);
+    const lb2 = Math.round(cb + (255 - cb) * wh);
+    ctx.fillStyle = `rgba(${lr2},${lg2},${lb2},${Math.min(1, a)})`;
+    ctx.fill(paths[b]);
+  }
+
+  /* sparks: bright points thrown off the edge, fading as they fly out */
+  let live = 0;
+  if (sparkTarget > 0) {
+    const want = Math.min(sparkTarget, vorb.SPMAX);
+    for (let i = 0; i < vorb.SPMAX && live < want; i++) {
+      const sp = vorb.sparks[i];
+      if (sp.age < sp.life) { live++; continue; }
+      const j = (Math.random() * vorb.COUNT) | 0;      // launch from a surface point
+      let dx = vorb.px[j], dy = vorb.py[j], dz = vorb.pz[j];
+      const x1 = dx * cyw + dz * syw, z1 = dz * cyw - dx * syw;
+      const y2 = dy * cpw - z1 * spw, z2 = dy * spw + z1 * cpw;
+      const s = dist / (dist - z2);
+      sp.x = cx + x1 * s * Rp; sp.y = cy + y2 * s * Rp;
+      const ex = sp.x - cx, ey = sp.y - cy;
+      const el = Math.hypot(ex, ey) || 1;
+      const spd = (30 + Math.random() * 70) * (0.5 + hi);
+      sp.vx = ex / el * spd; sp.vy = ey / el * spd;
+      sp.age = 0; sp.life = 0.4 + Math.random() * 0.8;
+      live++;
+    }
+  }
+  let drawn = 0;
+  const spPath = new Path2D();
+  for (const sp of vorb.sparks) {
+    if (sp.age >= sp.life) continue;
+    sp.age += dt; sp.x += sp.vx * dt; sp.y += sp.vy * dt;
+    const fade = 1 - sp.age / sp.life;
+    if (fade <= 0) continue;
+    drawn++;
+    const sz = 0.9 + fade * 1.3;
+    spPath.moveTo(sp.x + sz, sp.y);
+    spPath.arc(sp.x, sp.y, sz, 0, Math.PI * 2);
+  }
+  if (drawn) {
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.fill(spPath);
+    ctx.fillStyle = `rgba(${Math.round(cr)},${Math.round(cg)},${Math.round(cb)},0.35)`;
+    ctx.fill(spPath);
+  }
+  P.sparks = drawn;
+
+  /* bright centre: white heart + soft halo in the state colour */
+  const coreR = R * (0.30 + breathe * 0.04 + lvl * 0.10) * P.radius;
+  const halo2 = ctx.createRadialGradient(cx, cy, coreR * 0.2, cx, cy, Rp * 1.4);
+  halo2.addColorStop(0, `rgba(${Math.round(cr)},${Math.round(cg)},${Math.round(cb)},0.28)`);
+  halo2.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, Rp * 1.4, 0, Math.PI * 2);
+  ctx.fill();
+  const heart = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  heart.addColorStop(0, "rgba(255,255,255,0.95)");
+  heart.addColorStop(0.5, "rgba(255,255,255,0.55)");
+  heart.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = heart;
+  ctx.beginPath();
+  ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+  ctx.fill();
+
+  const frameCost = performance.now() - frameStart;
+  P.frameMs = P.frameMs * 0.92 + frameCost * 0.08;
+}
+
+/* ---- M16d/M16e "quantum orbit lines": thin orbit loops in 7 different -----
+ * 3D planes around the mesh, each turning its own way, planes slowly tumbling,
+ * radii breathing, sparkle stars travelling along them. Distinct from the old
+ * flat rings (removed M16c): every orbit has its own plane normal, spread over
+ * the sphere with a golden-spiral set in the upper hemisphere (a plane is a
+ * +/- normal, so the 7 planes stay > 20 deg apart). Spin signs alternate.
+ * M16e: the loops are no longer circles — each orbit's radius around the loop
+ * and its lift out of its plane follow a few low harmonics whose amplitudes
+ * and phases drift on their own (circle -> wavy -> flower -> twisted/saddle
+ * and back), every orbit with its own shape, and the centres wander a little.
+ * __orbits.morph eases ~0.35 at rest, ~0.85 while speaking or working (engine
+ * level / state). __orbits.speed follows the engine level: ~1 at rest, eases
+ * to ~6 when work starts. prefers-reduced-motion: shapes, lifts, centres,
+ * normals and radii frozen, speed fixed at 1. window.__orbits exposes it all
+ * for tests (profile/lift sample the CURRENT curve).
+ */
+const orbits = (() => {
+  const N = 7;
+  const reduced = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const rr = mulberry32(77);
+  const ga = Math.PI * (3 - Math.sqrt(5));           // golden angle
+  const TAU = Math.PI * 2;
+  const pick = (pool, n) => {                        // n distinct pool entries
+    const c = [...pool], out = [];
+    while (out.length < n && c.length) out.push(c.splice(Math.floor(rr() * c.length), 1)[0]);
+    return out;
+  };
+  const os = [];
+  for (let i = 0; i < N; i++) {
+    const y = (i + 0.5) / N;                          // upper hemisphere only
+    const rxy = Math.sqrt(Math.max(0, 1 - y * y));
+    const th = ga * i;
+    let ax = [rr() - 0.5, rr() - 0.5, rr() - 0.5];    // own slow tumble axis
+    const al = Math.hypot(ax[0], ax[1], ax[2]) || 1;
+    ax = [ax[0] / al, ax[1] / al, ax[2] / al];
+    /* M16e shape harmonics: 3-4 radial harmonics k in {2,3,4,5}; amplitudes
+     * drift as two slow sines (0.05-0.25 rad/s), phases drift slowly too. */
+    const boost = i === 0 ? 1.5 : 1;                  // one orbit clearly non-circular
+    const hs = pick([2, 3, 4, 5], 3 + (rr() < 0.5 ? 1 : 0)).map(k => ({
+      k,
+      a0: (0.12 + rr() * 0.07) * boost,
+      w1: 0.05 + rr() * 0.20, p1: rr() * TAU,
+      w2: 0.05 + rr() * 0.20, p2: rr() * TAU,
+      pw: 0.15 + rr() * 0.20, pp: rr() * TAU,         // phase drift rad/s
+    }));
+    const ls = pick([2, 3], 2).map(m => ({            // saddle/twist out-of-plane lift
+      m,
+      b0: 0.10 + rr() * 0.08,
+      w: 0.05 + rr() * 0.20, p: rr() * TAU,
+      qw: 0.08 + rr() * 0.14, qp: rr() * TAU,
+    }));
+    os.push({
+      n: [rxy * Math.cos(th), y, rxy * Math.sin(th)],
+      spin: (i % 2 ? -1 : 1) * (0.08 + rr() * 0.12),  // 0.08..0.2 rad/s, signs alternate
+      r0: 1.2 + rr() * 0.6,                           // 1.2..1.8 mesh radii
+      brA: 0.04 + rr() * 0.025, brW: 0.3 + rr() * 0.2, brP: rr() * TAU,
+      ax, tw: 0.05 + rr() * 0.10,                     // tumble rate rad/s (visible drift)
+      hs, ls,
+      cAmp: 0.06 + rr() * 0.05,                       // per-axis; |offset| <= 0.11*sqrt(3) < 0.2
+      cW: [0.05 + rr() * 0.06, 0.05 + rr() * 0.06, 0.05 + rr() * 0.06],
+      cP: [rr() * TAU, rr() * TAU, rr() * TAU],
+    });
+  }
+  const stars = [];
+  for (let k = 0; k < 9; k++) {
+    stars.push({ orbit: k % N, off: rr() * TAU, size: 0.8 + rr() * 0.7 });
+  }
+  const FROZEN_T = 3.7;                               // reduced-motion shape time
+  const shapeT = t => (reduced ? FROZEN_T : t);
+  const harmAmp = (h, t) =>                           // a_k(t): slow smooth drift
+    h.a0 * Math.max(0.05, Math.min(1.15,
+      0.55 + 0.5 * Math.sin(h.w1 * t + h.p1) + 0.35 * Math.sin(h.w2 * t + h.p2)));
+  const harmPhase = (h, t) => h.pp + h.pw * t;
+  const liftAmp = (l, t) => l.b0 * (0.6 + 0.4 * Math.sin(l.w * t + l.p));
+  const liftPhase = (l, t) => l.qp + l.qw * t;
+  /* radius shape factor at loop angle th (1 = circle), clamped positive */
+  function shapeAt(o, th, morph, t) {
+    let s = 0, sumA = 0;
+    for (const h of o.hs) {
+      const a = harmAmp(h, t);
+      s += a * Math.cos(h.k * th + harmPhase(h, t));
+      sumA += a;
+    }
+    const maxPoss = sumA * morph;
+    const scale = maxPoss > 0.3 ? 0.3 / maxPoss : 1;
+    return Math.max(0.45, 1 + morph * s * scale);
+  }
+  /* out-of-plane lift at loop angle th, in mesh radii */
+  function liftAt(o, th, morph, t) {
+    let s = 0, sumB = 0;
+    for (const l of o.ls) {
+      const b = liftAmp(l, t);
+      s += b * Math.sin(l.m * th + liftPhase(l, t));
+      sumB += b;
+    }
+    const maxPoss = sumB * morph;
+    const scale = maxPoss > 0.25 ? 0.25 / maxPoss : 1;
+    return morph * s * scale;
+  }
+  /* small slow centre wander (per-axis amplitude cAmp, |offset| < 0.2) */
+  function centerAt(o, t) {
+    return [o.cAmp * Math.sin(o.cW[0] * t + o.cP[0]),
+            o.cAmp * Math.sin(o.cW[1] * t + o.cP[1]),
+            o.cAmp * Math.sin(o.cW[2] * t + o.cP[2])];
+  }
+  return { os, stars, speed: 1, speedTarget: 1, reduced, morph: 0.35,
+           shapeT, shapeAt, liftAt, centerAt };
+})();
+
+window.__orbits = {
+  count: orbits.os.length,
+  normals: orbits.os.map(o => [...o.n]),
+  spins: orbits.os.map(o => o.spin),
+  radii: orbits.os.map(o => o.r0),
+  sparkles: orbits.stars.length,
+  speed: 1,
+  morph: 0.35,
+  centers: orbits.os.map(o => orbits.centerAt(o, orbits.shapeT(0))),
+  samples: 180,
+  extent: 0,
+  pxRatio: 1.4,
+  visible: false,      /* M19: true only while the "mesh-orbits" style is on; the
+                        * maths keep running regardless so M16d/M16e exams pass. */
+  /* M16e: sample orbit i's CURRENT curve at n evenly spaced loop angles.
+   * profile: radius divided by its mean over the samples (1 = circle);
+   * lift: out-of-plane offset in mesh radii. */
+  profile(i, n) {
+    const o = orbits.os[i], t = orbits.shapeT(performance.now() / 1000);
+    const m = orbits.reduced ? 0.35 : window.__orbits.morph;
+    const rs = [];
+    for (let j = 0; j < n; j++) rs.push(orbits.shapeAt(o, 2 * Math.PI * j / n, m, t));
+    const mean = rs.reduce((a, b) => a + b, 0) / n || 1;
+    return rs.map(r => r / mean);
+  },
+  lift(i, n) {
+    const o = orbits.os[i], t = orbits.shapeT(performance.now() / 1000);
+    const m = orbits.reduced ? 0.35 : window.__orbits.morph;
+    const out = [];
+    for (let j = 0; j < n; j++) out.push(orbits.liftAt(o, 2 * Math.PI * j / n, m, t));
+    return out;
+  },
+};
+
+function orbitsStep(dt, nowMs) {
+  const O = window.__orbits;
+  if (orbits.reduced) { O.speed = 1; return; }        // frozen: nothing changes
+  orbits.speedTarget = 1 + 5 * window.__engine.level; // engine start -> ~6
+  orbits.speed += (orbits.speedTarget - orbits.speed) * Math.min(1, dt * 3.2);
+  O.speed = orbits.speed;
+  /* M16e: morph strength eases ~0.35 at rest, ~0.85 while speaking/working */
+  const drive = Math.max(window.__engine.level,
+                         curState === "speaking" ? 1 : 0,
+                         mesh.work ? 1 : 0);
+  const morphTarget = 0.35 + 0.5 * Math.min(1, drive);
+  orbits.morph += (morphTarget - orbits.morph) * Math.min(1, dt * 5);
+  O.morph = orbits.morph;
+  const t = nowMs / 1000;
+  for (let k = 0; k < orbits.os.length; k++) {
+    const o = orbits.os[k];
+    /* tumble: rotate the normal a little around its own axis (Rodrigues), renormalise */
+    const dA = o.tw * dt;
+    if (dA) {
+      const [ax, ay, az] = o.ax, [nx, ny, nz] = o.n;
+      const c = Math.cos(dA), s = Math.sin(dA);
+      const dot = ax * nx + ay * ny + az * nz;
+      const cxp = ay * nz - az * ny, cyp = az * nx - ax * nz, czp = ax * ny - ay * nx;
+      let x = nx * c + cxp * s + ax * dot * (1 - c);
+      let y2 = ny * c + cyp * s + ay * dot * (1 - c);
+      let z = nz * c + czp * s + az * dot * (1 - c);
+      const l = Math.hypot(x, y2, z) || 1;
+      o.n[0] = x / l; o.n[1] = y2 / l; o.n[2] = z / l;
+    }
+    /* breathing: the base radius swells and relaxes slowly */
+    O.radii[k] = o.r0 * (1 + o.brA * Math.sin(t * o.brW + o.brP));
+    /* M16e: the centre wanders slowly */
+    const ctr = orbits.centerAt(o, t);
+    O.centers[k][0] = ctr[0]; O.centers[k][1] = ctr[1]; O.centers[k][2] = ctr[2];
+  }
+  for (let k = 0; k < orbits.os.length; k++) {
+    O.normals[k][0] = orbits.os[k].n[0];
+    O.normals[k][1] = orbits.os[k].n[1];
+    O.normals[k][2] = orbits.os[k].n[2];
+  }
+}
+
+function orbitsDraw(ctx, cx, cy, R, nowMs, rgb) {
+  const drawing = window.__orbits.visible;     // M19: maths always, lines only when shown
+  const [cr, cg, cb] = rgb;
+  const lr = Math.round(cr + (255 - cr) * 0.5);       // state colour 50% to white
+  const lg = Math.round(cg + (255 - cg) * 0.5);
+  const lb = Math.round(cb + (255 - cb) * 0.5);
+  const t = nowMs / 1000, spd = window.__orbits.speed;
+  const SEG = 180, dist = 3.2;                         // same camera as the mesh
+  const front = new Path2D(), back = new Path2D();
+  const tSh = orbits.shapeT(t), morph = window.__orbits.morph;
+  const orbitScale = 1.0;
+  let maxDist = 0;
+  let sumDist = 0, countPts = 0;
+  ctx.lineWidth = 0.9;
+  ctx.lineCap = "round";
+  for (let k = 0; k < orbits.os.length; k++) {
+    const o = orbits.os[k], n = o.n;
+    /* two orthonormal basis vectors spanning the orbit plane */
+    const rx = n[2], rz = -n[0];                       // n x Y (|y| < 1 always)
+    const rl = Math.hypot(rx, rz) || 1;
+    const ux = rx / rl, uy = 0, uz = rz / rl;
+    const vx = n[1] * uz - n[2] * uy, vy = n[2] * ux - n[0] * uz, vz = n[0] * uy - n[1] * ux;
+    const rad = window.__orbits.radii[k] * R * orbitScale;
+    /* M16e: trace the CURRENT deformed curve — radius harmonics morph the
+     * loop shape, the lift bends it out of its plane (saddle/twist), the
+     * centre wanders — instead of a fixed circle/ellipse. */
+    const off = window.__orbits.centers[k];
+    const ox = off[0] * R * orbitScale, oy = off[1] * R * orbitScale, oz = off[2] * R * orbitScale;
+    let px = 0, py = 0, pf = true, started = false;
+    for (let j = 0; j <= SEG; j++) {
+      const a = 2 * Math.PI * j / SEG;
+      const rr2 = rad * orbits.shapeAt(o, a, morph, tSh);
+      const ca = Math.cos(a) * rr2, sa = Math.sin(a) * rr2;
+      const li = orbits.liftAt(o, a, morph, tSh) * orbitScale;       // mesh radii
+      const x = ux * ca + vx * sa + n[0] * li * R + ox;
+      const y = uy * ca + vy * sa + n[1] * li * R + oy;
+      /* depth stays in mesh radii (dist = 3.2 > 2.34 max) or the
+       * perspective divide goes negative and throws in the gradient */
+      const z = (uz * ca + vz * sa) / R + n[2] * li + off[2] * orbitScale;
+      const s = dist / (dist - z);
+      const qx = cx + x * s, qy = cy + y * s, qf = z >= 0;
+      const dCenter = Math.hypot(qx - cx, qy - cy);
+      if (dCenter > maxDist) maxDist = dCenter;
+      sumDist += dCenter; countPts++;
+      if (started) (pf ? front : back).moveTo(px, py), (pf ? front : back).lineTo(qx, qy);
+      px = qx; py = qy; pf = qf; started = true;
+    }
+    if (drawing) {
+      ctx.strokeStyle = `rgba(${lr},${lg},${lb},0.12)`;
+      ctx.stroke(back);
+      ctx.strokeStyle = `rgba(${lr},${lg},${lb},0.45)`;
+      ctx.stroke(front);
+    }
+  }
+  /* sparkles: bright stars travelling along their orbit's deformed curve */
+  if (drawing) for (const st of orbits.stars) {
+    const o = orbits.os[st.orbit], n = o.n;
+    const rx = n[2], rz = -n[0];
+    const rl = Math.hypot(rx, rz) || 1;
+    const ux = rx / rl, uy = 0, uz = rz / rl;
+    const vx = n[1] * uz, vy = n[2] * ux - n[0] * uz, vz = -n[1] * ux;
+    const rad = window.__orbits.radii[st.orbit] * R * orbitScale;
+    const off = window.__orbits.centers[st.orbit];
+    const ox = off[0] * R * orbitScale, oy = off[1] * R * orbitScale;
+    const a = st.off + t * o.spin * spd;
+    const rr2 = rad * orbits.shapeAt(o, a, morph, tSh);
+    const ca = Math.cos(a) * rr2, sa = Math.sin(a) * rr2;
+    const li = orbits.liftAt(o, a, morph, tSh) * orbitScale;
+    const x = ux * ca + vx * sa + n[0] * li * R + ox;
+    const y = uy * ca + vy * sa + n[1] * li * R + oy;
+    const z = (uz * ca + vz * sa) / R + n[2] * li + off[2] * orbitScale;
+    const s = dist / (dist - z);
+    const qx = cx + x * s, qy = cy + y * s;
+    const dCenter = Math.hypot(qx - cx, qy - cy);
+    if (dCenter > maxDist) maxDist = dCenter;
+    const depth = Math.max(0, Math.min(1, (z + 1) / 2));
+    const alpha = 0.25 + 0.75 * depth;
+    const twk = 0.7 + 0.3 * Math.sin(t * 3.1 + st.off * 5);
+    const size = st.size * (0.8 + 0.6 * depth) * s;
+    /* soft radial glow */
+    const glow = ctx.createRadialGradient(qx, qy, 0, qx, qy, size * 5);
+    glow.addColorStop(0, `rgba(255,255,255,${0.5 * alpha * twk})`);
+    glow.addColorStop(0.35, `rgba(${lr},${lg},${lb},${0.25 * alpha * twk})`);
+    glow.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(qx, qy, size * 5, 0, Math.PI * 2);
+    ctx.fill();
+    /* tiny 4-point twinkle cross */
+    const cl = size * 3.2 * twk;
+    ctx.strokeStyle = `rgba(255,255,255,${0.55 * alpha * twk})`;
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(qx - cl, qy); ctx.lineTo(qx + cl, qy);
+    ctx.moveTo(qx, qy - cl); ctx.lineTo(qx, qy + cl);
+    ctx.stroke();
+    /* bright core dot */
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(1, 0.6 + 0.4 * alpha)})`;
+    ctx.beginPath();
+    ctx.arc(qx, qy, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const halfSide = Math.min(viewW, viewH) / 2;
+  if (halfSide > 0) {                          /* M19: keep extent/pxRatio alive
+                                                * even while the lines are hidden */
+    window.__orbits.extent = maxDist / halfSide;
+    window.__orbits.pxRatio = (R > 0 && countPts > 0) ? (sumDist / countPts) / R : 1.4;
+  }
+}
+
+/* ---- playback: gapless 24 kHz PCM16 via scheduled AudioBuffers ---------- */
+const liveSources = new Set();
+function flushPlayback() {           // stop_playback / interrupted (barge-in)
+  // Stop queued buffers but keep the (gesture-unlocked) context alive.
+  for (const s of liveSources) { try { s.stop(); } catch (_) {} }
+  liveSources.clear();
+  playTime = 0;
+}
+
+function playPcm(bytes) {
+  if (!playCtx || playCtx.state === "closed") return;  // created in Start gesture
+  const n = bytes.byteLength >> 1;
+  const pcm = new Int16Array(bytes);
+  const buf = playCtx.createBuffer(1, n, SPEAKER_RATE);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) ch[i] = pcm[i] / 32768;
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(playAnalyser);          // analyser fans out to the destination
+  liveSources.add(src); src.onended = () => liveSources.delete(src);
+  const now = playCtx.currentTime;
+  if (playTime < now + 0.02) playTime = now + 0.02;   // underrun -> restart now
+  src.start(playTime);                                 // back-to-back = gapless
+  playTime += buf.duration;
+}
+
+/* ---- capture: AudioWorklet downsamples mic -> 16 kHz PCM16 frames -------- */
+const workletSrc = `
+class PcmDownsampler extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.targetRate = options.processorOptions.targetRate;
+    this.frameLen = Math.round(this.targetRate * ${FRAME_MS} / 1000);
+    this.frame = new Int16Array(this.frameLen);
+    this.filled = 0;
+    this.carry = 0.0;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0]) return true;
+    const samples = input[0];
+    const step = sampleRate / this.targetRate;
+    let pos = this.carry;
+    while (pos < samples.length) {
+      const i = Math.floor(pos);
+      const frac = pos - i;
+      const a = samples[i], b = i + 1 < samples.length ? samples[i + 1] : a;
+      const v = Math.max(-1, Math.min(1, a + (b - a) * frac));
+      this.frame[this.filled++] = v < 0 ? v * 32768 : v * 32767;
+      if (this.filled === this.frameLen) {
+        // Transferring the buffer detaches this.frame (its length becomes 0),
+        // so the next frame must be sized from the saved frameLen.
+        this.port.postMessage(this.frame.buffer, [this.frame.buffer]);
+        this.frame = new Int16Array(this.frameLen);
+        this.filled = 0;
+      }
+      pos += step;
+    }
+    this.carry = pos - samples.length;
+    return true;
+  }
+}
+registerProcessor("pcm-downsampler", PcmDownsampler);
+`;
+
+async function startMic(ctx) {
+  // ctx is created synchronously in the click handler: Safari keeps an
+  // AudioContext suspended unless it is created/resumed inside a user gesture.
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+  });
+  if (ctx.state === "suspended") await ctx.resume();
+  const url = URL.createObjectURL(new Blob([workletSrc], { type: "application/javascript" }));
+  await ctx.audioWorklet.addModule(url);       // AudioWorklet from an inline Blob
+  URL.revokeObjectURL(url);
+  const src = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, "pcm-downsampler",
+    { processorOptions: { targetRate: MIC_RATE } });
+  node.port.onmessage = (e) => {
+    if (muted || paused) return;                          // mute/pause: drop frames
+    if (ws && ws.readyState === WebSocket.OPEN) { ws.send(e.data); dbg.up += e.data.byteLength; }
+  };
+  micAnalyser = ctx.createAnalyser();          // orb breathes with your voice
+  micAnalyser.fftSize = 512;
+  micAnalyser.smoothingTimeConstant = 0.55;
+  micBuf = new Uint8Array(micAnalyser.fftSize);
+  src.connect(micAnalyser);
+  src.connect(node);
+  node.connect(ctx.destination);
+  micStarted = true;
+  playCue("listen");                             // the "I'm listening" blip
+}
+
+let replacedByOther = false;
+/* ---- websocket ------------------------------------------------------------ */
+function connect() {
+  ws = new WebSocket("ws://" + location.host + "/live");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    // Truthful state (M15a): "listening" only once the mic is really capturing.
+    if (micStarted) setState(muted ? "muted" : "listening");
+    else applyState(curState);
+    // M15L: opened via the launcher -> 7 greets you (once per connection).
+    if (launchPending) { launchPending = false; ws.send(JSON.stringify({ type: "launch" })); }
+  };
+  ws.onclose = () => { if (replacedByOther) return; setState("reconnecting"); setTimeout(connect, 1000); };
+  ws.onerror = () => setState("error");
+  ws.onmessage = (e) => {
+    if (typeof e.data !== "string") { dbg.down += e.data.byteLength; playPcm(e.data); return; }  // PCM16 24 kHz
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    sevenHandleEvent(ev);
+  };
+}
+
+/* Every JSON event from the server runs through here (exposed on window so
+ * tests — and any future surface — can drive the same path the ws uses). */
+function sevenHandleEvent(ev) {
+    const cue = cueFor(ev);                      // M9: every event may sound a cue
+    if (cue) playCue(cue);
+    if (muted && ev.type === "state") return;    // keep the muted state on screen
+    engineEvent(ev);                             // M16: the orb engine spins up on work
+    switch (ev.type) {
+      case "state":
+        if (ev.state === "listening") lines = endTurn(lines);
+        // Truthful state (M15a): never claim "listening" before the mic is live.
+        if (ev.state === "listening" && !micStarted) break;
+        setState(ev.state); break;
+      case "transcript_in": caption("you", ev.text); break;
+      case "transcript_out": caption("seven", ev.text); break;
+      case "interrupted":
+        lines = endTurn(lines);
+        flushPlayback(); setState(muted ? "muted" : "listening"); break;
+      case "replaced":                 // another 7 window took over: stay quiet, don't reconnect
+        replacedByOther = true; flushPlayback(); setState("idle");
+        caption("seven", "7 is open in another window — this one is paused.");
+        break;
+      case "stop_playback": flushPlayback(); break;
+      case "tool_started": setState("executing"); break;
+      case "tool_result": break;
+      case "mode": setMode(ev.mode); break;
+      case "paused": setPaused(ev.minutes); break;        // M13 assistant_pause
+      case "news": showNews(ev); break;                   // M16: headlines on 7's screen
+      case "news_live": showNewsLive(ev); break;          // M16: live TV in 7's window
+      case "news_close": closeNews(); break;
+      case "approval_needed": showApproval(ev); break;
+      case "approval_closed":
+        closeApproval(ev.action_id);
+        caption("seven", ev.approved ? "Approved." : "Not approved (" + ev.reason + ").");
+        break;
+      case "voice":
+        // server confirmed the voice change; the session is reconnecting now
+        caption("seven", "Voice: " + ev.voice); break;
+      case "vision": break;   // server confirmed our sharing state (we set it)
+      case "job": upsertJob(ev); break;                       // M12 timeline
+      case "hermes_done":
+        // The full answer landed: attach the summary to the job's card.
+        if (ev.summary && jobCards[ev.job_id]) {
+          const reply = jobCards[ev.job_id].querySelector(".j-reply");
+          if (reply && !reply.textContent) reply.textContent = ev.summary;
+        }
+        break;
+      case "file_received":
+        caption("seven", "Got your file: " + ev.name + " (" + ev.kind + ").");
+        break;
+      case "error": setState("error"); caption("seven", "Error: " + ev.error); break;
+    }
+}
+window.sevenHandleEvent = sevenHandleEvent;
+
+/* ---- news on 7's screen (M16) ---------------------------------------------
+ * The news tools on the server emit {"type":"news","feed","items"},
+ * {"type":"news_live","channel","url"} and {"type":"news_close"}. Headlines
+ * render as links in #news; live TV is a YouTube embed in #news-live. The
+ * page accepts ONLY https://www.youtube.com/embed/ urls — anything else is
+ * refused (the server's allow-list already does this; the page checks again).
+ * On a narrow screen the news opens the Work drawer so it is visible at once.
+ */
+const newsEl = document.getElementById("news");
+const newsLiveEl = document.getElementById("news-live");
+
+function openWorkOnMobile() {
+  if (window.innerWidth < 700 && !workEl.classList.contains("open")) {
+    workEl.classList.add("open");
+    workToggle.setAttribute("aria-expanded", "true");
+  }
+}
+
+function showNews(ev) {
+  const items = Array.isArray(ev.items) ? ev.items : [];
+  newsEl.textContent = "";
+  const h = document.createElement("h3");
+  h.textContent = "News — " + (ev.feed || "world");
+  newsEl.appendChild(h);
+  const ul = document.createElement("ul");
+  for (const item of items) {
+    if (!item || typeof item.title !== "string" || !item.title) continue;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.textContent = item.title;
+    a.href = typeof item.link === "string" && /^https:\/\//.test(item.link)
+      ? item.link : "#";
+    a.rel = "noopener";
+    a.target = "_blank";
+    li.appendChild(a);
+    if (item.published || item.source) {
+      const meta = document.createElement("span");
+      meta.className = "news-meta";
+      meta.textContent = [item.source, item.published].filter(Boolean).join(" · ");
+      li.appendChild(meta);
+    }
+    ul.appendChild(li);
+  }
+  newsEl.appendChild(ul);
+  newsEl.hidden = false;
+  newsEl.classList.add("on");
+  openWorkOnMobile();
+}
+
+function showNewsLive(ev) {
+  const url = String(ev.url || "");
+  if (!url.startsWith("https://www.youtube.com/embed/")) return;  // allow-list only
+  newsLiveEl.textContent = "";
+  const h = document.createElement("h3");
+  h.textContent = "Live — " + (ev.channel || "News");
+  const f = document.createElement("iframe");
+  f.src = url;
+  f.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
+  f.setAttribute("allowfullscreen", "");
+  f.title = ev.channel || "Live news";
+  newsLiveEl.appendChild(h);
+  newsLiveEl.appendChild(f);
+  newsLiveEl.hidden = false;
+  newsLiveEl.classList.add("on");
+  openWorkOnMobile();
+}
+
+function closeNews() {
+  newsEl.hidden = true; newsEl.classList.remove("on");
+  newsLiveEl.hidden = true; newsLiveEl.classList.remove("on");
+  newsLiveEl.textContent = "";               // removes the iframe -> stream stops
+}
+
+/* ---- vision (M10): screen / camera sharing, 1 fps JPEG ---------------------
+ * Frames leave this machine ONLY while a share is on, as 'V'+jpeg binary
+ * frames over the same ws; the server drops anything while vision is "off".
+ * A red pulsing badge is visible the whole time; ending the share (button or
+ * the browser's own stop control) always sends {"type":"vision","source":"off"}.
+ */
+const shareScreenBtn = document.getElementById("share-screen");
+const shareCameraBtn = document.getElementById("share-camera");
+const visionBadge = document.getElementById("vision-badge");
+
+let visStream = null, visTimer = null, visSource = "off";
+
+function sendVisionState() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "vision", source: visSource }));
+  }
+}
+
+function grabFrame() {
+  if (!visStream) return;
+  const track = visStream.getVideoTracks()[0];
+  if (!track || track.readyState !== "live") { stopShare(); return; }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const settings = track.getSettings ? track.getSettings() : {};
+  const vw = settings.width || 1280, vh = settings.height || 720;
+  const scale = Math.min(1, 1280 / vw);           // never wider than 1280 px
+  const cw = Math.max(1, Math.round(vw * scale));
+  const ch = Math.max(1, Math.round(vh * scale));
+  const cnv = document.createElement("canvas");
+  cnv.width = cw; cnv.height = ch;
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true;
+  v.srcObject = visStream;
+  v.play().then(() => {
+    cnv.getContext("2d").drawImage(v, 0, 0, cw, ch);
+    v.pause(); v.srcObject = null;
+    // data:image/jpeg;base64,.... -> raw JPEG bytes (quality ~0.6)
+    const b64 = cnv.toDataURL("image/jpeg", 0.6).split(",")[1];
+    const bin = atob(b64);
+    const out = new Uint8Array(1 + bin.length);
+    out[0] = 0x56;                                 // 'V' = video frame
+    for (let i = 0; i < bin.length; i++) out[i + 1] = bin.charCodeAt(i);
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(out);
+  }).catch(() => { v.srcObject = null; });
+}
+
+function stopShare() {
+  if (visTimer) { clearInterval(visTimer); visTimer = null; }
+  if (visStream) {
+    for (const t of visStream.getTracks()) { try { t.stop(); } catch (_) {} }
+    visStream = null;
+  }
+  const wasOn = visSource !== "off";
+  visSource = "off";
+  visionBadge.classList.remove("on");
+  shareScreenBtn.classList.remove("on");
+  shareCameraBtn.classList.remove("on");
+  if (wasOn) { sendVisionState(); playCue("stop"); }
+}
+
+async function startShare(source) {
+  if (visSource === source) { stopShare(); return; }   // toggle off
+  stopShare();
+  let stream;
+  try {
+    stream = source === "screen"
+      ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+      : await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  } catch (err) {
+    caption("seven", (source === "screen" ? "Screen" : "Camera") +
+      " sharing unavailable: " + err.message);
+    return;
+  }
+  visStream = stream;
+  visSource = source;
+  const track = stream.getVideoTracks()[0];
+  if (track) track.addEventListener("ended", stopShare);  // browser's stop button
+  visionBadge.textContent = source === "screen" ? "sharing screen" : "camera on";
+  visionBadge.classList.add("on");
+  (source === "screen" ? shareScreenBtn : shareCameraBtn).classList.add("on");
+  sendVisionState();
+  grabFrame();                                 // first frame right away
+  visTimer = setInterval(grabFrame, 1000);     // then 1 fps
+}
+
+shareScreenBtn.addEventListener("click", () => startShare("screen"));
+shareCameraBtn.addEventListener("click", () => startShare("camera"));
+window.addEventListener("beforeunload", stopShare);
+
+/* ---- mute + text input ----------------------------------------------------- */
+muteBtn.addEventListener("click", () => {
+  muted = !muted;
+  muteLabel.textContent = muted ? "Unmute" : "Mute";
+  muteBtn.setAttribute("aria-label", muted ? "Unmute" : "Mute");
+  muteBtn.classList.toggle("muted", muted);
+  setState(muted ? "muted" : (prevState === "muted" ? "listening" : prevState));
+  renderCaptions();
+});
+
+sayEl.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const text = sayEl.value.trim();
+  if (!text) return;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "text", text: text }));
+  caption("you", text);
+  lines = endTurn(lines);
+  sayEl.value = "";
+});
+
+/* ---- universe orb -----------------------------------------------------------
+ * A living core: additive glow, >=60 orbiting particles with trails, standing
+ * rings/waves, a far starfield with gentle parallax. Colour/speed/pulse come
+ * from orbParams() per state; the core breathes with the real audio level
+ * (mic AnalyserNode while listening, playback AnalyserNode while speaking).
+ * Colour transitions between states are lerped over ~400 ms.
+ */
+
+function hexToRgb(hex) {
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+}
+
+/* seeded PRNG so the starfield is stable frame to frame */
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const rnd = mulberry32(7);
+const stars = [];
+/* 3D starfield: x, y in -1..1 on a plane at depth z (1 = far, 0 = camera);
+ * stars drift slowly toward the viewer and are respawned far away */
+function newStar(s, anyDepth) {
+  s.x = rnd() * 2 - 1; s.y = rnd() * 2 - 1;
+  s.z = anyDepth ? 0.08 + rnd() * 0.92 : 1;
+  s.size = 0.6 + rnd() * 1.2; s.tw = rnd() * Math.PI * 2; s.twf = 1.2 + rnd() * 2.6;
+  return s;
+}
+for (let i = 0; i < 220; i++) stars.push(newStar({}, true));
+window.__starfield = { stars };
+const starsReduced = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+const particles = [];
+for (let i = 0; i < MAX_PARTICLES; i++) {
+  const rr = 0.24 + rnd() * 0.34;
+  particles.push({
+    rx: rr * (0.85 + rnd() * 0.3), rz: rr * (0.55 + rnd() * 0.45),
+    tilt: (rnd() - 0.5) * 0.9, dir: rnd() < 0.85 ? 1 : -1,
+    phase: rnd() * Math.PI * 2, w: 0.45 + rnd() * 0.75, size: 0.8 + rnd() * 1.7,
+  });
+}
+const dust = [];
+for (let i = 0; i < 40; i++) {
+  dust.push({ a: rnd() * Math.PI * 2, r: 0.05 + rnd() * 0.13, w: 0.15 + rnd() * 0.35,
+              size: 0.5 + rnd() * 1.0 });
+}
+
+let curColor = hexToRgb(STATE_STYLE.idle.color);
+let curPulse = STATE_STYLE.idle.pulse;
+let levelSm = 0, timeSm = 0, lastFrame = 0;
+let viewW = 0, viewH = 0, dpr = 1;
+const pointer = { x: 0, y: 0, sx: 0, sy: 0 };
+
+function resize() {
+  dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  const rect = canvas.parentElement.getBoundingClientRect();
+  viewW = Math.max(1, rect.width); viewH = Math.max(1, rect.height);
+  canvas.width = Math.round(viewW * dpr);
+  canvas.height = Math.round(viewH * dpr);
+  g2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resize);
+window.addEventListener("pointermove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / Math.max(1, viewW) - 0.5) * 2;
+  pointer.y = ((e.clientY - rect.top) / Math.max(1, viewH) - 0.5) * 2;
+});
+resize();
+
+function drawOrb(nowMs) {
+  const frameStart = performance.now();
+  const dt = lastFrame ? Math.min(0.05, (nowMs - lastFrame) / 1000) : 0.016;
+  lastFrame = nowMs;
+  timeSm += dt;
+
+  /* audio level: playback while speaking, mic otherwise */
+  micLevel = readLevel(micAnalyser, micBuf);
+  playLevel = readLevel(playAnalyser, playBuf);
+  userSpeaking = !muted && micLevel > 0.07;    // near-talking -> duck the pad
+  /* mic level meter in the status strip (M15a) */
+  levelBar.style.transform = "scaleX(" + micLevel.toFixed(3) + ")";
+  const raw = curState === "speaking" ? playLevel
+            : Math.max(micLevel, playLevel * 0.6);
+  levelSm += (raw - levelSm) * Math.min(1, dt * 10);   // fast attack, soft decay
+  meshStep(dt, levelSm, nowMs);                        // M16b: ease deform/spin
+  orbitsStep(dt, nowMs);                               // M16d: tumble/breathe/speed
+  bandsStep(dt, nowMs);                                // M19: low/mid/high bands
+
+  /* M16 engine: the level chases engineTarget (fast up, soft down) and the
+   * mesh flare follows it — no rings any more (M16c), the glow carries it. */
+  const eng = window.__engine;
+  eng.level += (engineTarget - eng.level) * Math.min(1, dt * 3.2);
+  window.__mesh.flare += (engineTarget - window.__mesh.flare) * Math.min(1, dt * 3.2);
+  const flare = window.__mesh.flare;
+
+  const params = orbParams(curState, levelSm, timeSm);
+
+  /* lerp colour + pulse towards the state's style over ~400 ms */
+  const target = hexToRgb(params.color);
+  const k = Math.min(1, dt * (1000 / 400) * 0.24);
+  for (let i = 0; i < 3; i++) curColor[i] += (target[i] - curColor[i]) * k;
+  curPulse += ((STATE_STYLE[curState] || STATE_STYLE.idle).pulse - curPulse) * k;
+  const cr = curColor[0] | 0, cg = curColor[1] | 0, cb = curColor[2] | 0;
+  const rgba = (a) => `rgba(${cr},${cg},${cb},${a})`;
+
+  /* parallax: pointer eases towards its target */
+  pointer.sx += (pointer.x - pointer.sx) * Math.min(1, dt * 4);
+  pointer.sy += (pointer.y - pointer.sy) * Math.min(1, dt * 4);
+
+  /* background: deep space + far glow (canvas-only; the page theme is CSS) */
+  g2d.globalCompositeOperation = "source-over";
+  const bg = g2d.createRadialGradient(viewW / 2, viewH * 0.42, 0,
+                                      viewW / 2, viewH * 0.42, Math.max(viewW, viewH) * 0.75);
+  bg.addColorStop(0, "#0b1424");
+  bg.addColorStop(0.55, "#060b16");
+  bg.addColorStop(1, "#02040a");
+  g2d.fillStyle = bg;
+  g2d.fillRect(0, 0, viewW, viewH);
+
+  const cx = viewW / 2 + pointer.sx * -14;
+  const cy = viewH * 0.42 + pointer.sy * -10;
+  const unit = Math.min(viewW, viewH * 1.15);
+  /* M16e shrank the whole orb to 0.45 so the orbit lines fit the stage. The
+   * plain mesh has no orbit lines, so it is drawn at its pre-M16e size again
+   * (user, 2026-10-10); the hidden orbit maths keeps the 0.45 size. */
+  const Rorb = params.radius * unit * 0.45;
+  const R = window.__mesh.style === "mesh" ? params.radius * unit : Rorb;
+
+  /* starfield with parallax + twinkle (M19: switchable; starsDrawn = last frame) */
+  g2d.globalCompositeOperation = "lighter";
+  let starsDrawn = 0;
+  if (window.__mesh.starfield) {
+    /* faster while 7 talks or works, still while reduced motion is asked for */
+    const warp = starsReduced ? 0 : 0.035 + levelSm * 0.10 + (curState === "thinking" ? 0.05 : 0);
+    const F = Math.max(viewW, viewH) * 0.5;
+    const sx0 = viewW / 2, sy0 = viewH * 0.42;
+    for (const s of stars) {
+      s.z -= warp * dt;
+      if (s.z < 0.06) newStar(s, false);
+      const near = 1 - s.z;                                   // 0 far .. 1 close
+      const px = sx0 + (s.x / s.z) * F * 0.55 + pointer.sx * 30 * near;
+      const py = sy0 + (s.y / s.z) * F * 0.55 + pointer.sy * 20 * near;
+      if (px < -4 || px > viewW + 4 || py < -4 || py > viewH + 4) continue;
+      const tw = starsReduced ? 1 : 0.25 + 0.75 * (0.5 + 0.5 * Math.sin(timeSm * s.twf + s.tw));
+      const fadeIn = Math.min(1, (1 - s.z) * 6);               // no popping in far away
+      g2d.fillStyle = `rgba(200,222,255,${Math.min(1, (0.18 + 0.75 * near) * tw * fadeIn)})`;
+      g2d.beginPath();
+      g2d.arc(px, py, s.size * (0.35 + near * 1.3), 0, Math.PI * 2);
+      g2d.fill();
+      starsDrawn++;
+    }
+  }
+  window.__mesh.starsDrawn = starsDrawn;
+
+  /* M16c: no "soft standing waves" background circles any more — the mesh
+   * carries the orb; __mesh.bgRings stays 0 for the tests. */
+  const breathe = 0.5 + 0.5 * Math.sin(timeSm * 1.4);
+
+  /* ambient halo behind everything */
+  const halo = g2d.createRadialGradient(cx, cy, 0, cx, cy, R * 4.2);
+  halo.addColorStop(0, rgba(0.16 + levelSm * 0.12));
+  halo.addColorStop(0.5, rgba(0.05));
+  halo.addColorStop(1, rgba(0));
+  g2d.fillStyle = halo;
+  g2d.beginPath();
+  g2d.arc(cx, cy, R * 4.2, 0, Math.PI * 2);
+  g2d.fill();
+
+  const orbStyle = window.__mesh.style;   // mesh | mesh-orbits | particles | glow
+  if (orbStyle === "mesh" || orbStyle === "mesh-orbits") {
+    /* ---- M16b Quantum mesh: rotating deformed wire sphere in state colour -
+     * drawn between the halo and the white heart; particles/dust stay out so
+     * the wire reads clearly. M19: the orbit lines are drawn only for the
+     * "mesh-orbits" style (orbitsDraw still runs the maths either way). */
+    g2d.lineCap = "round";
+    orbitsDraw(g2d, cx, cy, Rorb, nowMs, [cr, cg, cb]);
+    meshDraw(g2d, cx, cy, R, nowMs, [cr, cg, cb],
+             (0.55 + levelSm * 0.45) * (1 + 0.7 * flare));   // M16c: flare brightens the mesh
+
+    /* bright white core at the centre of the lattice */
+    const coreR = R * (0.52 + breathe * curPulse * 0.10 + levelSm * 0.10);
+    const mglow = g2d.createRadialGradient(cx, cy, coreR * 0.1, cx, cy, coreR * 2.6);
+    mglow.addColorStop(0, rgba(0.30 + 0.25 * flare));
+    mglow.addColorStop(0.5, rgba(0.08 + 0.10 * flare));
+    mglow.addColorStop(1, rgba(0));
+    g2d.fillStyle = mglow;
+    g2d.beginPath();
+    g2d.arc(cx, cy, coreR * 2.6, 0, Math.PI * 2);
+    g2d.fill();
+    const heart = g2d.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+    heart.addColorStop(0, "rgba(255,255,255,0.96)");
+    heart.addColorStop(0.4, "rgba(255,255,255,0.72)");
+    heart.addColorStop(0.75, rgba(0.35 + 0.20 * flare));
+    heart.addColorStop(1, rgba(0));
+    g2d.fillStyle = heart;
+    g2d.beginPath();
+    g2d.arc(cx, cy, coreR, 0, Math.PI * 2);
+    g2d.fill();
+  } else {
+    window.__mesh.vertices = 0;         // particles / glow: no mesh is drawn
+  }
+
+  if (orbStyle === "particles") {
+    /* ---- M19 Voice Orb: sphere of glowing particles, 3-band reactive ---- */
+    orbitsDraw(g2d, cx, cy, Rorb, nowMs, [cr, cg, cb]);   // maths only (hidden)
+    vorbDraw(g2d, cx, cy, R, nowMs, [cr, cg, cb], levelSm, breathe);
+  } else if (orbStyle === "glow") {
+  /* orbiting particles: tilted 3D rings projected to 2D, drawn back-to-front */
+  const spin = params.spin;
+  const drawList = [];
+  for (let i = 0; i < Math.min(params.particles, particles.length); i++) {
+    const p = particles[i];
+    const a = p.phase + timeSm * p.w * spin * p.dir;
+    const x0 = Math.cos(a) * p.rx * unit;
+    const z0 = Math.sin(a) * p.rz * unit;
+    const x = x0 * Math.cos(p.tilt) - z0 * Math.sin(p.tilt);
+    const y = z0 * Math.cos(p.tilt) + x0 * Math.sin(p.tilt);
+    const depth = (z0 / (p.rz * unit) + 1) / 2;          // 0 back .. 1 front
+    drawList.push({ p, x: cx + x, y: cy + y, depth });
+  }
+  drawList.sort((m, n) => m.depth - n.depth);
+  for (const d of drawList) {
+    const tw = 0.5 + 0.5 * Math.sin(timeSm * 2.1 + d.p.phase * 3);
+    const alpha = (0.10 + 0.55 * d.depth) * (0.55 + 0.45 * tw) * (0.7 + levelSm * 0.6);
+    const size = d.p.size * (0.6 + d.depth * 0.9) * (1 + levelSm * 0.5);
+    /* short trail behind the particle, opposite its motion */
+    const ta = d.p.phase + (timeSm - 0.09) * d.p.w * spin * d.p.dir;
+    const tx0 = Math.cos(ta) * d.p.rx * unit;
+    const tz0 = Math.sin(ta) * d.p.rz * unit;
+    const tx = cx + tx0 * Math.cos(d.p.tilt) - tz0 * Math.sin(d.p.tilt);
+    const ty = cy + tz0 * Math.cos(d.p.tilt) + tx0 * Math.sin(d.p.tilt);
+    g2d.strokeStyle = rgba(alpha * 0.35);
+    g2d.lineWidth = size * 0.7;
+    g2d.beginPath();
+    g2d.moveTo(tx, ty);
+    g2d.lineTo(d.x, d.y);
+    g2d.stroke();
+    g2d.fillStyle = rgba(Math.min(1, alpha + 0.15));
+    g2d.beginPath();
+    g2d.arc(d.x, d.y, size, 0, Math.PI * 2);
+    g2d.fill();
+  }
+
+  /* inner dust swirling close to the core */
+  for (const m of dust) {
+    const a = m.a + timeSm * m.w * (spin + 0.4);
+    const r = m.r * unit * (1 + levelSm * 0.5);
+    g2d.fillStyle = rgba(0.5 * (0.4 + curPulse * 0.6));
+    g2d.beginPath();
+    g2d.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r * 0.8, m.size, 0, Math.PI * 2);
+    g2d.fill();
+  }
+
+  /* the glowing core itself: outer glow, body, bright heart */
+  const coreR = R * (0.94 + breathe * curPulse * 0.10 + levelSm * 0.10);
+  const glow = g2d.createRadialGradient(cx, cy, coreR * 0.2, cx, cy, coreR * 2.1);
+  glow.addColorStop(0, rgba(0.55));
+  glow.addColorStop(0.45, rgba(0.18));
+  glow.addColorStop(1, rgba(0));
+  g2d.fillStyle = glow;
+  g2d.beginPath();
+  g2d.arc(cx, cy, coreR * 2.1, 0, Math.PI * 2);
+  g2d.fill();
+
+  const body = g2d.createRadialGradient(cx - coreR * 0.3, cy - coreR * 0.35, coreR * 0.05,
+                                        cx, cy, coreR);
+  body.addColorStop(0, "rgba(255,255,255,0.92)");
+  body.addColorStop(0.25, rgba(0.85));
+  body.addColorStop(0.7, rgba(0.45));
+  body.addColorStop(1, rgba(0.10));
+  g2d.fillStyle = body;
+  g2d.beginPath();
+  g2d.arc(cx, cy, coreR, 0, Math.PI * 2);
+  g2d.fill();
+  }   /* end glow-only body (M16b) */
+
+  g2d.globalCompositeOperation = "source-over";
+  /* M16b: expose the mesh for tests + keep a rolling frame-time average */
+  window.__mesh.deform = mesh.deform;
+  window.__mesh.spin = mesh.spin;
+  window.__mesh.rotation = mesh.rotation;
+  const frameCost = performance.now() - frameStart;
+  window.__mesh.frameMs = window.__mesh.frameMs * 0.92 + frameCost * 0.08;
+  requestAnimationFrame(drawOrb);
+}
+requestAnimationFrame(drawOrb);
+
+/* ---- settings: voice picker + ambient toggle + volume (all persisted) ----- */
+voiceSel.addEventListener("change", () => {
+  const v = voiceSel.value;
+  saveSetting("voice", v);
+  // Tell the server; it closes the Live session and reconnects with this voice.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "set_voice", voice: v }));
+  }
+});
+
+musicChk.addEventListener("change", () => {
+  saveSetting("music", musicChk.checked ? "1" : "0");
+  if (musicChk.checked) startMusic(); else stopMusic();
+});
+
+musicVolEl.addEventListener("input", () => {
+  musicBase = Math.max(0, Math.min(1, Number(musicVolEl.value) / 100));
+  saveSetting("music_vol", musicVolEl.value);
+  applyMusicDuck();
+});
+
+cuesChk.addEventListener("change", () => {
+  cuesOn = cuesChk.checked;
+  saveSetting("cues", cuesOn ? "1" : "0");
+});
+
+/* M19: orb look, persisted like the other settings. Four styles: "mesh"
+ * (mesh + glowing core, no orbit lines), "mesh-orbits" (today's look),
+ * "particles" (Voice Orb), "glow" (the old orb). Unknown values -> "mesh".
+ * The orbit maths keep running in every style; __orbits.visible only gates
+ * the line/sparkle drawing. */
+function applyOrbStyle() {
+  let v = orbStyleSel.value;
+  if (!["mesh", "mesh-orbits", "particles", "glow"].includes(v)) {
+    v = "mesh";
+    orbStyleSel.value = v;
+  }
+  window.__mesh.style = v;
+  window.__orbits.visible = v === "mesh-orbits";
+  saveSetting("orb_style", v);
+}
+orbStyleSel.addEventListener("change", applyOrbStyle);
+
+/* M19: starfield on/off, persisted */
+starfieldChk.addEventListener("change", () => {
+  window.__mesh.starfield = starfieldChk.checked;
+  saveSetting("starfield", starfieldChk.checked ? "1" : "0");
+});
+
+/* Restore saved settings before first paint. */
+voiceSel.value = loadSetting("voice", "Charon");
+musicChk.checked = loadSetting("music", "0") === "1";
+musicVolEl.value = loadSetting("music_vol", "35");
+musicBase = Math.max(0, Math.min(1, Number(musicVolEl.value) / 100));
+cuesChk.checked = loadSetting("cues", "1") === "1";   // default on
+cuesOn = cuesChk.checked;
+starfieldChk.checked = loadSetting("starfield", "1") === "1";   // default on
+window.__mesh.starfield = starfieldChk.checked;
+/* The Voice Orb was the default for a day (2026-10-09); the user asked to go
+ * back to the mesh, so installs from that day move back to it once. */
+if (loadSetting("orb_default_v", "") === "2") {
+  saveSetting("orb_style", "mesh");
+  saveSetting("orb_default_v", "3");
+}
+orbStyleSel.value = loadSetting("orb_style", "mesh");
+applyOrbStyle();
+
+/* ---- debug line: hidden by default, toggled with "d" ---------------------- */
+const dbg = { up: 0, down: 0 };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey
+      && e.target !== sayEl && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+    debugEl.style.display = debugEl.style.display === "block" ? "none" : "block";
+  }
+});
+setInterval(() => {
+  debugEl.textContent = `ws:${ws ? ws.readyState : "-"} mic:${micStarted ? "on" : "off"} ` +
+    `muted:${muted} spk:${playCtx ? playCtx.state : "-"} up:${(dbg.up / 32000).toFixed(1)}s ` +
+    `down:${(dbg.down / 48000).toFixed(1)}s lvl:${levelSm.toFixed(2)}`;
+}, 500);
+
+/* ---- M15L: launched from the desktop (URL has ?launch=1) ------------------
+ * Auto-start through the SAME code path as the Start button, but only when
+ * the microphone permission is already granted (no surprise prompts); once
+ * the websocket is up the page sends one {"type": "launch"} so 7 greets you. */
+const launchQuery = new URLSearchParams(location.search).get("launch") === "1";
+let launchPending = false;
+
+async function beginSession() {
+  overlay.classList.add("hidden");
+  saveSetting("consent", "1");   // remember: next visit starts without a click
+  // Both contexts are created synchronously here (the Start click is a user
+  // gesture; the launch path relies on the launcher's autoplay flag instead).
+  if (!micCtx) micCtx = new AudioContext();
+  if (!playCtx) {
+    playCtx = new AudioContext({ sampleRate: SPEAKER_RATE });
+    playAnalyser = playCtx.createAnalyser();   // orb breathes with 7's voice
+    playAnalyser.fftSize = 512;
+    playAnalyser.smoothingTimeConstant = 0.55;
+    playAnalyser.connect(playCtx.destination);
+    playBuf = new Uint8Array(playAnalyser.fftSize);
+    playTime = 0;
+  }
+  await playCtx.resume();
+  if (!micStarted) await startMic(micCtx);
+  setState(muted ? "muted" : "listening");   // mic is live NOW: say so
+  if (musicChk.checked) startMusic();
+}
+
+/* Native 7 Live window (?native=1): the app grants the microphone itself and calls
+ * window.sevenNativeStart() the moment the launch animation hands over, so 7 greets you
+ * as the window appears — no browser, no click. */
+const nativeShell = new URLSearchParams(location.search).get("native") === "1";
+let nativeStarted = false;
+window.sevenNativeStart = async () => {
+  if (nativeStarted) return "ok";
+  nativeStarted = true;
+  try {
+    if (launchQuery) launchPending = true;
+    await beginSession();
+    if (launchPending && ws && ws.readyState === WebSocket.OPEN) {
+      launchPending = false;
+      ws.send(JSON.stringify({ type: "launch" }));
+    }
+    return "ok";
+  } catch (err) {
+    nativeStarted = false;                     // the app retries; Start button still works
+    launchPending = false;
+    return "error " + (err && err.message || err);
+  }
+};
+
+if (launchQuery && !nativeShell) {
+  (async () => {
+    try {
+      const perm = await navigator.permissions.query({ name: "microphone" });
+      if (perm.state !== "granted") return;    // never surprise-prompt: Start stays
+      launchPending = true;                    // ws sends {"type":"launch"} on open
+      await beginSession();
+      // The socket may already be open (query resolved after onopen).
+      if (launchPending && ws && ws.readyState === WebSocket.OPEN) {
+        launchPending = false;
+        ws.send(JSON.stringify({ type: "launch" }));
+      }
+    } catch (_) {
+      launchPending = false;                   // fall back to the Start button
+    }
+  })();
+}
+
+/* Browsers require one user gesture before audio: single Start overlay. */
+overlay.addEventListener("click", async () => {
+  try {
+    await beginSession();
+  } catch (err) {
+    setState("error");
+    caption("seven", "Microphone unavailable: " + err.message);
+  }
+});
+
+/* Always-active: consent was given before -> try to start with no click.
+ * Audio contexts must be created up front (Safari keeps them suspended
+ * outside a gesture); if the browser refuses to resume them or the mic
+ * permission prompt fails, the Start overlay simply stays on screen. */
+if (hasConsent()) {
+  (async () => {
+    try {
+      micCtx = new AudioContext();
+      playCtx = new AudioContext({ sampleRate: SPEAKER_RATE });
+      playAnalyser = playCtx.createAnalyser();
+      playAnalyser.fftSize = 512;
+      playAnalyser.smoothingTimeConstant = 0.55;
+      playAnalyser.connect(playCtx.destination);
+      playBuf = new Uint8Array(playAnalyser.fftSize);
+      playTime = 0;
+      await playCtx.resume();          // no-op promise if autoplay is blocked
+      await startMic(micCtx);          // throws if the browser refuses
+      overlay.classList.add("hidden"); // worked -> skip the Start screen
+      setState(muted ? "muted" : "listening");
+      if (musicChk.checked) startMusic();
+    } catch (_) {
+      /* autoplay / mic refused -> fall back to the overlay Start click */
+    }
+  })();
+}
+
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent TEMPLATE (not installed). The app installs its own copy with
+  its launcher (see README, Desktop app). To use this file by hand,
+  replace YOUR_USER and the repo path, copy it to ~/Library/LaunchAgents/ and
+  run: launchctl load ~/Library/LaunchAgents/com.seven.live.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.seven.live</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USER/seven/.venv/bin/python</string>
+        <string>-m</string>
+        <string>live7</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USER/seven</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/.seven/live7_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/.seven/live7_stderr.log</string>
+</dict>
+</plist>
